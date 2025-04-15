@@ -1,0 +1,8 @@
+[build]
+target = "aarch64-unknown-none"
+rustflags = ['-Clink-args=-Tlinker.ld']
+
+[target.aarch64-unknown-none]
+linker = "rust-lld"
+rustflags = ["-C", "link-arg=-Tlinker.ld"]
+runner = "qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -kernel "

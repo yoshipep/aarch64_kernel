@@ -1,0 +1,17 @@
+[package]
+name = "aarch64_kernel" # Crate name (like a module name or lib name in C)
+version = "0.1.0"
+authors = ["Josep Comes <jcomes@jcomes.org>"]
+edition = "2024" # Rust language edition
+
+[profile.dev]
+opt-level = 0 # No optimizations for debug builds
+debug = true # Include debug info for GDB or logging
+
+[profile.release]
+opt-level = 3 # Highest optimization for performance (release builds)
+lto = true # Link-time optimization
+debug = false
+
+[lib]
+crate-type = ["staticlib"] # Build this crate as a static library

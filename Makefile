@@ -10,14 +10,13 @@ VERSION := debug
 # File paths
 SRC_DIR = src
 ASM_DIR = $(SRC_DIR)/asm
-BOOT_ASM = $(ASM_DIR)/boot.s
-KERNEL_RS = $(SRC_DIR)/lib.rs
+RUST_SRC := $(shell find $(SRC_DIR) -name '*.rs')
+ASM_SRC := $(shell find $(SRC_DIR) -name '*.s')
 LINKER_SCRIPT = linker.ld
 
 # Output filenames
-BOOT_OBJ = $(ASM_DIR)/boot.o
+ASM_OBJS := $(ASM_SRC:.s=.o)
 CRATE_NAME := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
-#KERNEL_OBJ = $(shell find `pwd`/target/$(TARGET)/$(VERSION) -name "*lib*.a")
 KERNEL_OBJ = target/$(TARGET)/$(VERSION)/lib$(CRATE_NAME).a
 KERNEL_ELF = kernel.elf
 
@@ -28,16 +27,16 @@ QEMU_FLAGS = -machine virt -cpu cortex-a57 -nographic -kernel $(KERNEL_ELF)
 all: $(KERNEL_ELF)
 
 # Assemble the boot.s to boot.o
-$(BOOT_OBJ): $(BOOT_ASM)
+$(ASM_DIR)/%.o: $(ASM_DIR)/%.s
 	$(AS) $< -o $@
 
 # Compile the Rust kernel to an object file
-$(KERNEL_OBJ): $(KERNEL_RS)
+$(KERNEL_OBJ): $(RUST_SRC)
 	cargo build --target $(TARGET)
 
 # Link the kernel object and boot object into an ELF
-$(KERNEL_ELF): $(BOOT_OBJ) $(KERNEL_OBJ) $(LINKER_SCRIPT)
-	$(LD) -flavor gnu -o $(KERNEL_ELF) -T $(LINKER_SCRIPT) -o $@ $(BOOT_OBJ) $(KERNEL_OBJ)
+$(KERNEL_ELF): $(ASM_OBJS) $(KERNEL_OBJ) $(LINKER_SCRIPT)
+	$(LD) -flavor gnu -T $(LINKER_SCRIPT) -o $@ $(ASM_OBJS) $(KERNEL_OBJ)
 
 # Run the kernel with QEMU
 run: $(KERNEL_ELF)
@@ -47,6 +46,6 @@ run: $(KERNEL_ELF)
 clean:
 	cargo clean
 	rm -rf target
-	rm -f $(BOOT_OBJ) $(KERNEL_ELF)
+	rm -f $(ASM_OBJS) $(KERNEL_ELF)
 
 .PHONY: all run clean

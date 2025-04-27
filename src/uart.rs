@@ -49,11 +49,10 @@ fn read_reg(offset: isize) -> u32 {
     }
 }
 
-fn write_reg(offset: isize, val: u32) {
+fn write_reg(offset: isize, val: u32, mask: u32) {
     unsafe {
         let mut contents: u32 = *(UART.base_addr.offset(offset));
-        // Mask to save the bits that we are not overwriting
-        contents &= !val;
+        contents &= mask;
         contents |= val;
         *(UART.base_addr.offset(offset)) = contents;
     }
@@ -62,7 +61,7 @@ fn write_reg(offset: isize, val: u32) {
 #[unsafe(no_mangle)]
 pub fn configure_uart() {
     // 1. Disable the UART
-    disable_uart();
+    uart_write_cr(0, !CR_UARTEN);
     // 2. Wait for the end of TX
     loop {
         if uart_ready() {
@@ -70,7 +69,7 @@ pub fn configure_uart() {
         }
     }
     // 3. Flush TX FIFO
-    uart_flush_tx_fifo();
+    uart_write_lcr(LCR_FEN, !LCR_FEN);
     // 4. Set speed
     set_uart_low_speed();
     // 5. Configure the data frame format
@@ -83,43 +82,35 @@ pub fn configure_uart() {
             cfg |= LCR_STP2;
         }
     }
-    uart_write_lcr(cfg);
+    uart_write_lcr(cfg, 0xff37);
     // 6. Mask all interrupts
-    uart_write_msc(0x7ff);
+    uart_write_msc(0x7ff, 0x7ff);
     // 7. Disable DMA
-    uart_write_dmacr(0);
+    uart_write_dmacr(0, 0x7);
     // 8. Enable TX
-    uart_write_cr(CR_TXEN);
+    uart_write_cr(CR_TXEN, !CR_TXEN);
     // 9. Enable UART
-    uart_write_cr(CR_UARTEN);
-}
-
-fn disable_uart() {
-    uart_write_cr(CR_UARTEN);
+    uart_write_cr(CR_UARTEN, !CR_UARTEN);
 }
 
 fn uart_ready() -> bool {
     return (read_reg(FR_OFF) & FR_BUSY) == 0;
 }
 
-fn uart_flush_tx_fifo() {
-    write_reg(LCR_OFF, LCR_FEN);
+fn uart_write_lcr(value: u32, mask: u32) {
+    write_reg(LCR_OFF, value, mask);
 }
 
-fn uart_write_lcr(cfg: u32) {
-    write_reg(LCR_OFF, cfg);
+fn uart_write_cr(value: u32, mask: u32) {
+    write_reg(CR_OFF, value, mask);
 }
 
-fn uart_write_cr(cfg: u32) {
-    write_reg(CR_OFF, cfg);
+fn uart_write_msc(value: u32, mask: u32) {
+    write_reg(IMSC_OFF, value, mask);
 }
 
-fn uart_write_msc(mask: u32) {
-    write_reg(IMSC_OFF, mask);
-}
-
-fn uart_write_dmacr(mask: u32) {
-    write_reg(DMACR_OFF, mask);
+fn uart_write_dmacr(value: u32, mask: u32) {
+    write_reg(DMACR_OFF, value, mask);
 }
 
 fn uart_set_speed() {
@@ -128,14 +119,14 @@ fn uart_set_speed() {
         let ibrd = baud_div / 1000;
         let fbrd = (((baud_div % 1000) * 64 + 500) / 1000) as u32;
 
-        write_reg(IBRD_OFF, ibrd & 0xffff);
-        write_reg(FBRD_OFF, fbrd & 0x3f);
+        write_reg(IBRD_OFF, ibrd, 0xffff);
+        write_reg(FBRD_OFF, fbrd, 0x3f);
     }
 }
 
 fn set_uart_low_speed() {
-    write_reg(IBRD_OFF, (1 << 16) - 1);
-    write_reg(FBRD_OFF, 0);
+    write_reg(IBRD_OFF, (1 << 16) - 1, 0xffff);
+    write_reg(FBRD_OFF, 0, 0x3f);
 }
 
 fn putchar(c: u8) {

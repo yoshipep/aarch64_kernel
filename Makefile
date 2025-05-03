@@ -1,6 +1,7 @@
 # Target architecture and toolchain
 TARGET = aarch64-unknown-none
 AS = aarch64-linux-gnu-as
+ASFLAGS = -I./include/asm
 CC = aarch64-linux-gnu-gcc-14
 CFLAGS = -Wall -ggdb -ffreestanding -nostdlib -I./include
 LD = rust-lld
@@ -28,7 +29,7 @@ all: $(KERNEL_ELF)
 
 # Assemble the boot.s to boot.o
 $(ASM_DIR)/%.o: $(ASM_DIR)/%.s
-	$(AS) $< -o $@
+	$(AS) $(ASFLAGS) $< -o $@
 
 # Compile the Rust kernel to an object file
 $(KERNEL_OBJ): $(RUST_SRC)

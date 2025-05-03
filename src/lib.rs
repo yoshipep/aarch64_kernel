@@ -4,6 +4,7 @@
 #![no_std]
 
 mod uart;
+mod exceptions;
 
 // Required to handle panics manually when `no_std` is enabled
 use core::panic::PanicInfo;

@@ -3,6 +3,12 @@
 .global _start
 
 _start:
+    # Mask all interrupts
+    msr DAIFSet, #0b1111
+    # Load the interrupt vector address into VBAR_EL1
+    ldr x0, =evt
+    msr VBAR_EL1, x0
+    isb
     ldr x30, =stack_top
     mov sp, x30
     # In a near future this parameters will be given by the machine:
@@ -15,5 +21,6 @@ _start:
     mov x2, #23
     bl init_uart
     bl configure_uart
+    svc #0
     bl kmain
     b .

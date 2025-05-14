@@ -49,12 +49,12 @@ fn read_reg(offset: isize) -> u32 {
     }
 }
 
-fn write_reg(offset: isize, val: u32, mask: u32) {
+fn write_reg(base_addr: *mut u32, offset: isize, val: u32, mask: u32) {
     unsafe {
-        let mut contents: u32 = *(UART.base_addr.offset(offset));
+        let mut contents: u32 = read_reg(offset);
         contents &= mask;
         contents |= val;
-        *(UART.base_addr.offset(offset)) = contents;
+        *(base_addr.offset(offset)) = contents;
     }
 }
 

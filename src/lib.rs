@@ -5,6 +5,7 @@
 
 mod uart;
 mod exceptions;
+mod gic;
 
 // Required to handle panics manually when `no_std` is enabled
 use core::panic::PanicInfo;
@@ -13,7 +14,7 @@ use core::panic::PanicInfo;
 // no_mangle: Disables Rust's name mangling
 // extern "C": Uses C calling convention
 #[unsafe(no_mangle)]
-pub extern "C" fn kmain() {
+pub extern "C" fn kmain(_fdt_addr: usize) {
     // uart::init_uart(0x0900_0000);
     uart::print(b"Hello, from Rust\n");
 }

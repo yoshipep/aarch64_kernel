@@ -9,14 +9,28 @@
 .balign 2048
 
 evt:
-.skip 0x200
+sync0_trampoline:
+    b .
 
+.balign 0x80
+irq0_trampoline:
+    b .
+
+.balign 0x80
+fiq0_trampoline:
+    b .
+
+.balign 0x80
+serror0_trampoline:
+    b .
+
+.balign 0x80
 sync_trampoline:
     b sync_handler
 
 .balign 0x80
 irq_trampoline:
-    b .
+    b irq_handler
 
 .balign 0x80
 fiq_trampoline:
@@ -26,6 +40,7 @@ fiq_trampoline:
 serror_trampoline:
     b .
 
+.balign 0x80
 sync_handler:
     alloc_stack 256
     saveregs
@@ -43,6 +58,18 @@ unhandled:
     mov w0, w1
     bl unimplemented_sync
 sync_ret:
+    restoreregs
+    dealloc_stack 256
+    eret
+
+irq_handler:
+    alloc_stack 256
+    saveregs
+    # Read the interrupt ID
+    mrs x0, ICC_IAR1_EL1
+    bl do_irq
+    # Acknowledge the interrupt
+    msr ICC_EOIR1_EL1, x0
     restoreregs
     dealloc_stack 256
     eret

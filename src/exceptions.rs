@@ -1,3 +1,5 @@
+use core::arch::asm;
+
 use crate::uart;
 
 #[derive(Clone, Copy, Debug)]
@@ -63,7 +65,29 @@ pub extern "C" fn do_sync(_regs: *mut Regs, nr: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn do_irq() {}
+pub fn do_irq(id: u32) -> u32 {
+    match id {
+        30 => {
+            uart::print(b"Timer interrupt!\n");
+            unsafe {
+                asm!(
+                    "mrs x0, CNTFRQ_EL0",
+                    "msr CNTP_TVAL_EL0, x0",
+                    "isb",
+                    options(nostack, nomem)
+                );
+            }
+        }
+        _ => {
+            let mut buf = [0u8; 10];
+            let id_str = u32_to_str(id, &mut buf);
+            uart::print(b"Unhandled IRQ: ");
+            uart::print(id_str);
+            uart::print(b"\n");
+        }
+    }
+    return id;
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn do_fiq() -> ! {

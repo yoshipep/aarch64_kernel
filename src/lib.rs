@@ -6,6 +6,7 @@
 mod uart;
 mod exceptions;
 mod gic;
+mod utilities;
 
 // Required to handle panics manually when `no_std` is enabled
 use core::panic::PanicInfo;

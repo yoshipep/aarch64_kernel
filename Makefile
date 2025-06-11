@@ -2,8 +2,6 @@
 TARGET = aarch64-unknown-none
 AS = aarch64-linux-gnu-as
 ASFLAGS = -I./include/asm
-CC = aarch64-linux-gnu-gcc-14
-CFLAGS = -Wall -ggdb -ffreestanding -nostdlib -I./include
 LD = rust-lld
 QEMU = qemu-system-aarch64
 VERSION := debug

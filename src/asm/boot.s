@@ -1,6 +1,7 @@
 .section .text
 
 .global _start
+.type _start, @function
 
 _start:
     mov x0, #0x300000
@@ -18,6 +19,10 @@ _start:
     # x0: GIC DIST base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L166
     ldr x0, =0x08000000
     bl init_gic_distributor
+
+    mov x0, #0x0
+    msr ICC_CTLR_EL1, x0
+    isb sy
     # x0: GIC REDIST base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L174
     ldr x0, =0x080A0000
     bl init_gic_redistributor
@@ -30,6 +35,7 @@ _start:
     mov x0, #0xff
     bl set_priority_mask
     # 5. Enable Group 1 ints
+    bl enable_grp0_ints
     bl enable_grp1_ints
     # 6. Set a priority level for the timer
     mov w1, #30
@@ -52,12 +58,30 @@ next:
     ldr x0, =0x080A0000
     mov w1, #30
     bl enable_int
-    mrs x0, CNTFRQ_EL0
-    msr CNTP_TVAL_EL0, x0
-    mov x0, #0x1
-    msr CNTP_CTL_EL0, x0
-    # Unmask IRQs only
+    # mrs x0, CNTFRQ_EL0
+    # msr CNTP_TVAL_EL0, x0
+    # mov x0, #0x1
+    # msr CNTP_CTL_EL0, x0
+    ldr x0, =0x08000000
+    mov w1, #33
+    bl set_spi_group
+    ldr x0, =0x08000000
+    mov w1, #33
+    mov w2, #0xA0
+    bl set_spi_priority
+    ldr x0, =0x08000000
+    mov w1, #33
+    bl set_spi_trigger
+    ldr x0, =0x08000000
+    mov w1, #33
+    ldr x2, =0x80000000
+    bl set_spi_routing
+    ldr x0, =0x08000000
+    mov w1, #33
+    bl enable_spi
     msr DAIFClr, #0b0010
+    isb sy
+
     # In a near future this parameters will be given by the machine:
     # w0: UART base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L175
     # w1: UART clock frequency: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L323
@@ -68,6 +92,8 @@ next:
     mov w2, #23
     bl init_uart
     bl configure_uart
+    # Unmask IRQs only
+    mrs x9, ICC_PMR_EL1
     svc #0
     bl kmain
     b .

@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::uart;
+use crate::{uart, utilities};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -78,8 +78,19 @@ pub fn do_irq(id: u32) -> u32 {
                 );
             }
         }
+        33 => {
+            unsafe {
+                uart::RX_BUFFER.lock_irqsafe(|rx| {
+                    let ch = utilities::read_mmio(0x9000000, 0) as u8;
+                    let _ = rx.push(ch);
+                });
+                utilities::write_mmio(0x9000000, 0x44, 1 << 4);
+            }
+        }
         _ => {
+            uart::print(b"Unhandled IRQ: ");
             let mut buf = [0u8; 10];
+            uart::print(b"Unhandled IRQ: ");
             let id_str = u32_to_str(id, &mut buf);
             uart::print(b"Unhandled IRQ: ");
             uart::print(id_str);

@@ -1,32 +1,51 @@
+//! Generic interrupt controller (GIC) module
+
 use core::arch::asm;
 
 use crate::utilities::{clear_mmio_bits, read_mmio, set_mmio_bits, write_mmio};
 
-// --- GICD (Distributor) Register Constants ---
+/* --- GICD (Distributor) Constants --- */
+/// Distributor Control Register
 const GICD_CTLR: usize = 0x000;
+/// Enable non secure Group 1 interrupts bit
 const GICD_CTLR_GRP1NS: u32 = 0b10;
+/// Enable secure Group 1 interrupts bit
 const GICD_CTLR_GRP1S: u32 = 0b100;
+/// Affinity routing enable, secure state bit
 const GICD_CTLR_ARE_S: u32 = 0b10000; // ARE_S (bit 4), for when DS=1
+/// Interrupt Set-Enable Register
 const GICD_ISENABLER: usize = 0x100;
+/// Interrupt Priority Registers
 const GICD_IPRIORITYR: usize = 0x400;
+/// Interrupt Configuration Registers
 const GICD_ICFGR: usize = 0xC00;
+/// Interrupt Routing Registers
 const GICD_IROUTER: usize = 0x6100;
+/// Interrupt Group Registers
 const GICD_IGROUPR: usize = 0x080;
 
-// --- GICR (Redistributor) Register Constants ---
-const GICR_SGI_BASE: usize = 0x10000; // Offset from RD_base to SGI & PPI page
-
+/* --- GICR (Redistributor) Constants --- */
+/// SGI Frame offset
+const GICR_SGI_BASE: usize = 0x10000; // Offset from RD_base to SGI & PPI frame
+/// Redistributor Wake Register
 const GICR_WAKER: usize = 0x0014;
+/// Processor sleep bit. Indicates whether the Redistributor can assert the **WakeRequest**
+/// signal
 const GICR_WAKER_PSLEEP: u32 = 0b10;
+/// Children asleep bit. Indicates whether the connected PE is quiescent
 const GICR_WAKER_CASLEEP: u32 = 0b100;
-
+/// Interrupt Priority Registers
 const GICR_IPRIORITYR: usize = 0x400;
+/// Interrupt Group Register 0
 const GICR_IGROUPR0: usize = 0x080;
+/// Interrupt Set-Enable Register 0
 const GICR_ISENABLER0: usize = 0x100;
 
+/// Variable to hold if the affinity routing is enabled in the CPU
 #[unsafe(no_mangle)]
 pub static mut AFFINITY_ENABLED: bool = false;
 
+/// Initializes the GIC Distributor
 #[unsafe(no_mangle)]
 pub unsafe fn init_gic_distributor(dist_base: usize) {
     unsafe {
@@ -38,6 +57,7 @@ pub unsafe fn init_gic_distributor(dist_base: usize) {
     }
 }
 
+/// Initializes the GIC Redistributor
 #[unsafe(no_mangle)]
 pub unsafe fn init_gic_redistributor(rd_base: usize) {
     unsafe {
@@ -51,6 +71,9 @@ pub unsafe fn init_gic_redistributor(rd_base: usize) {
     }
 }
 
+/// Sets an interrupt mask
+///
+/// Sets the interrupt mask `priority`. Interrupts with a higher priority than `priority` will be signaled to the PE
 #[unsafe(no_mangle)]
 pub unsafe fn set_priority_mask(priority: u8) {
     unsafe {
@@ -58,6 +81,7 @@ pub unsafe fn set_priority_mask(priority: u8) {
     }
 }
 
+/// Enable the group 0 interrupts
 #[unsafe(no_mangle)]
 pub unsafe fn enable_grp0_ints() {
     unsafe {
@@ -72,6 +96,7 @@ pub unsafe fn enable_grp0_ints() {
     }
 }
 
+/// Enable the Group 1 interrupts
 #[unsafe(no_mangle)]
 pub unsafe fn enable_grp1_ints() {
     unsafe {
@@ -86,6 +111,9 @@ pub unsafe fn enable_grp1_ints() {
     }
 }
 
+/// Sets the priority for the given interrupt
+///
+/// Sets the priority `prio` to the given interrupt `id`
 #[unsafe(no_mangle)]
 pub unsafe fn set_int_priority(rd_base: usize, id: u32, prio: u8) {
     unsafe {
@@ -104,6 +132,9 @@ pub unsafe fn set_int_priority(rd_base: usize, id: u32, prio: u8) {
     }
 }
 
+/// Assign interrupts to the Group 1
+///
+/// Assigns the interrupt `id` to the Group 1
 #[unsafe(no_mangle)]
 pub unsafe fn set_int_grp(rd_base: usize, id: u32) {
     unsafe {
@@ -112,6 +143,9 @@ pub unsafe fn set_int_grp(rd_base: usize, id: u32) {
     }
 }
 
+/// Enables interrupt
+///
+/// Enables the interrupt with the given `id`
 #[unsafe(no_mangle)]
 pub unsafe fn enable_int(rd_base: usize, id: u32) {
     unsafe {
@@ -120,6 +154,9 @@ pub unsafe fn enable_int(rd_base: usize, id: u32) {
     }
 }
 
+/// Sets the priority of interrupts
+///
+/// Sets the priority `prio` to the interrupt `id`
 #[unsafe(no_mangle)]
 pub unsafe fn set_spi_priority(dist_base: usize, id: u32, prio: u8) {
     unsafe {
@@ -137,6 +174,9 @@ pub unsafe fn set_spi_priority(dist_base: usize, id: u32, prio: u8) {
     }
 }
 
+/// Sets the trigger mode for the interrupt
+///
+/// Sets edge trigger or level sensitive mode for the interrupt `id`
 #[unsafe(no_mangle)]
 pub unsafe fn set_spi_trigger(dist_base: usize, id: u32) {
     unsafe {
@@ -152,6 +192,9 @@ pub unsafe fn set_spi_trigger(dist_base: usize, id: u32) {
     }
 }
 
+/// Enables forwarding of the interrupt to the CPU interface
+///
+/// Enables forwarding of the interrupt `id` in the GIC distributor
 #[unsafe(no_mangle)]
 pub unsafe fn enable_spi(dist_base: usize, id: u32) {
     unsafe {
@@ -164,6 +207,10 @@ pub unsafe fn enable_spi(dist_base: usize, id: u32) {
     }
 }
 
+/// Provides routing information for the SPI
+///
+/// When affinity routing is enabled, provides routing information for the SPI with id `id`. It
+/// defines the routing mode by writting the value `core_affinity` into the corresponding register
 #[unsafe(no_mangle)]
 pub unsafe fn set_spi_routing(dist_base: usize, id: u32, core_affinity: u64) {
     unsafe {
@@ -174,6 +221,9 @@ pub unsafe fn set_spi_routing(dist_base: usize, id: u32, core_affinity: u64) {
     }
 }
 
+/// Assigns the SPI to the Group 1
+///
+/// Assigns the SPI `id` to the Group 1
 #[unsafe(no_mangle)]
 pub unsafe fn set_spi_group(dist_base: usize, id: u32) {
     unsafe {

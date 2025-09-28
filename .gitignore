@@ -6,3 +6,4 @@ debug/
 kernel.elf
 Cargo.lock
 *.o
+doc/

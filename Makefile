@@ -12,6 +12,7 @@ ASM_DIR = $(SRC_DIR)/asm
 RUST_SRC := $(shell find $(SRC_DIR) -name '*.rs')
 ASM_SRC := $(shell find $(SRC_DIR) -name '*.s')
 LINKER_SCRIPT = linker.ld
+DOC_DIR := doc
 
 # Output filenames
 ASM_OBJS := $(ASM_SRC:.s=.o)
@@ -41,10 +42,16 @@ $(KERNEL_ELF): $(ASM_OBJS) $(KERNEL_OBJ) $(LINKER_SCRIPT)
 run: $(KERNEL_ELF)
 	$(QEMU) $(QEMU_FLAGS)
 
+doc:
+	cargo doc --target $(TARGET) --no-deps --target-dir $(DOC_DIR)
+
+doc-open:
+	cargo doc --target $(TARGET) --no-deps --target-dir $(DOC_DIR) --open
+
 # Clean up build artifacts
 clean:
 	cargo clean
-	rm -rf target
+	rm -rf $(DOC_DIR)
 	rm -f $(ASM_OBJS) $(KERNEL_ELF)
 
 .PHONY: all run clean

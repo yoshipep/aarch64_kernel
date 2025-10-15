@@ -30,16 +30,16 @@ fn restore_interrupts(daif: u64) {
     }
 }
 
-/// A mutual exclusive (Mutex) primitive based on a spinlock
+/// A mutually exclusive (Mutex) primitive based on a spinlock
 ///
 /// This Mutex provides safe interior mutability by ensuring that only one thread can access the
 /// contained data at any given time. It uses an atomic boolean flag and a busy-wait loop to
 /// achieve this.
 pub struct Mutex<T> {
-    /// the atomic flag used to control access. `false` means unlocked, `true` locked
+    /// The atomic flag used to control access. `false` means unlocked, `true` locked
     lock: AtomicBool,
-    // The data protected by the mutex, wrapped in an `UnsafeCell` to allow mutable access through
-    // a shared reference
+    /// The data protected by the mutex, wrapped in an `UnsafeCell` to allow mutable access through
+    /// a shared reference
     data: UnsafeCell<T>,
 }
 

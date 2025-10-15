@@ -1,11 +1,37 @@
 ENTRY(_start)
+
+MEMORY {
+    RAM : ORIGIN = 0x40008000, LENGTH = 16M
+}
+
 SECTIONS {
-    . = 0x40100000;
-    .ktext.init : { boot.o(.text) }
-    .ktext : { *(.text) }
-    .kdata : { *(.data) }
-    .kbss : { *(.bss COMMON) }
-    . = ALIGN(8);
-    . += 0x1000;
+    . = ORIGIN(RAM);
+    .text :
+    {
+        *(.text.boot)
+        *(.text.*)
+    } > RAM
+
+    .rodata : ALIGN(4K)
+    {
+        *(.rodata.*)
+    } > RAM
+
+    .data : ALIGN(4K)
+    {
+        *(.data .data.*)
+    } > RAM
+
+    .bss : ALIGN(4K)
+    {
+        _bss_start = .;
+        *(.bss .bss.*)
+        *(COMMON)
+        _bss_end = .;
+    } > RAM
+
+    _kernel_end = .;
+    . = . + 64K;
+    . = ALIGN(64K);
     stack_top = .;
 }

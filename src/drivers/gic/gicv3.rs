@@ -1,8 +1,8 @@
-//! Generic interrupt controller (GIC) module
+//! Generic interrupt controller (GICv3) module
 
 use core::arch::asm;
 
-use crate::utilities::{clear_mmio_bits, read_mmio, set_mmio_bits, write_mmio};
+use crate::utilities::io::{clear_mmio_bits, read_mmio, set_mmio_bits, write_mmio};
 
 /* --- GICD (Distributor) Constants --- */
 /// Distributor Control Register

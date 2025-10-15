@@ -2,16 +2,16 @@
 //!
 //! This module provides functions to initialize, configure, and interact with a PL011 UART device.
 //!
-//!## Design
+//! ## Design
 //!
-//!The driver uses a mixed model for handling communication:
+//! The driver uses a mixed model for handling communication:
 //!
-//!- **Transmission (TX):** Writing characters (`putchar`, `print`) is done via **polling**. The
-//! code will wait in a loop until the UART's transmit buffer is ready to accept a new character.
+//! - **Transmission (TX):** Writing characters (`putchar`, `print`) is done via **polling**. The
+//!   code will wait in a loop until the UART's transmit buffer is ready to accept a new character.
 //!
-//!**Reception (RX):** Receiving characters is **interrupt-driven**. The interrupt handler (defined
-//! in `exceptions.rs`) reads the incoming byte and `push` it into the global `RX_BUFFER`. The
-//! `getchar` function then safely reads from this buffer.
+//! - **Reception (RX):** Receiving characters is **interrupt-driven**. The interrupt handler (defined
+//!   in `exceptions.rs`) reads the incoming byte and `push` it into the global `RX_BUFFER`. The
+//!   `getchar` function then safely reads from this buffer.
 //!
 //! ## Concurrency
 //!
@@ -22,8 +22,8 @@
 use core::ptr::write_volatile;
 use core::sync::atomic::AtomicUsize;
 
-use crate::irq_safe_mutex::Mutex;
-use crate::utilities::{read_mmio, set_mmio_bits, write_mmio};
+use crate::ipc::irq_safe_mutex::Mutex;
+use crate::utilities::io;
 use core::sync::atomic::Ordering;
 
 /// The size of the circular buffer used for receiving UART data
@@ -31,14 +31,14 @@ const UART_BUFFER_SIZE: usize = 256;
 
 /// A circular buffer for storing incoming UART data
 ///
-/// this buffer is designed to be written to by the UART interrupt handler and read from the
+/// This buffer is designed to be written to by the UART interrupt handler and read from the
 /// kernel's main execution context
 pub struct UartBuffer {
     /// The underlying array for the buffer
     buffer: [u8; UART_BUFFER_SIZE],
-    // The index where the next byte will be written
+    /// The index where the next byte will be written
     head: AtomicUsize,
-    // The index from which the next byte will be read
+    /// The index from which the next byte will be read
     tail: AtomicUsize,
 }
 
@@ -151,7 +151,7 @@ pub fn configure_uart() {
 
     // 1. Disable the UART
     unsafe {
-        write_mmio(UART.base_addr as usize, CR_OFF, 0);
+        io::write_mmio(UART.base_addr as usize, CR_OFF, 0);
     }
 
     // 2. Wait for the end of TX
@@ -163,7 +163,7 @@ pub fn configure_uart() {
 
     // 3.Flush TX fifo
     unsafe {
-        write_mmio(UART.base_addr as usize, LCR_OFF, !LCR_FEN);
+        io::write_mmio(UART.base_addr as usize, LCR_OFF, !LCR_FEN);
     }
     // 4. Set speed
     uart_set_speed();
@@ -178,29 +178,29 @@ pub fn configure_uart() {
     }
 
     unsafe {
-        write_mmio(UART.base_addr as usize, LCR_OFF, lcr_val);
+        io::write_mmio(UART.base_addr as usize, LCR_OFF, lcr_val);
     }
     // 6. Enable RX interrupt
     unsafe {
-        write_mmio(UART.base_addr as usize, IMSC_OFF, 0x00);
-        set_mmio_bits(UART.base_addr as usize, IMSC_OFF, IMSC_RXIM);
+        io::write_mmio(UART.base_addr as usize, IMSC_OFF, 0x00);
+        io::set_mmio_bits(UART.base_addr as usize, IMSC_OFF, IMSC_RXIM);
     }
     // 7. Disable DMA
     unsafe {
-        write_mmio(UART.base_addr as usize, DMACR_OFF, 0x00);
+        io::write_mmio(UART.base_addr as usize, DMACR_OFF, 0x00);
     }
     // 8. Enable TX and UART
     unsafe {
         cr_val = CR_UARTEN | CR_TXEN | (1 << 9);
-        set_mmio_bits(UART.base_addr as usize, CR_OFF, cr_val);
+        io::set_mmio_bits(UART.base_addr as usize, CR_OFF, cr_val);
     }
 }
 
-/// Checks itf the UART is busy TX data
+/// Checks if the UART is busy transmitting data
 #[unsafe(no_mangle)]
 fn uart_ready() -> bool {
     unsafe {
-        return (read_mmio(UART.base_addr as usize, FR_OFF) & FR_BUSY) == 0;
+        return (io::read_mmio(UART.base_addr as usize, FR_OFF) & FR_BUSY) == 0;
     }
 }
 
@@ -210,8 +210,8 @@ fn uart_set_speed() {
 
     unsafe {
         baud_div = 4 * UART.base_clock / UART.baudrate;
-        write_mmio(UART.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
-        write_mmio(UART.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
+        io::write_mmio(UART.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
+        io::write_mmio(UART.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
     }
 }
 
@@ -223,7 +223,7 @@ pub fn putchar(c: u8) {
 
     unsafe {
         loop {
-            if (read_mmio(UART.base_addr as usize, FR_OFF) & (1 << 5)) == 0 {
+            if (io::read_mmio(UART.base_addr as usize, FR_OFF) & (1 << 5)) == 0 {
                 break;
             }
         }
@@ -232,7 +232,7 @@ pub fn putchar(c: u8) {
     }
 }
 
-/// Reads a single byte from the interrupt dirven RX buffer
+/// Reads a single byte from the interrupt-driven RX buffer
 pub fn getchar() -> Option<u8> {
     RX_BUFFER.lock_irqsafe(|rx| rx.pop())
 }

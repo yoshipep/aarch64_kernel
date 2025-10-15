@@ -1,46 +1,140 @@
-# Target architecture and toolchain
+#==============================================================================
+# AArch64 Kernel Build System
+#==============================================================================
+# This Makefile builds:
+#   1. Kernel (src/) - Rust + Assembly
+#      - Uses kernel-specific assembly includes from src/include/asm/
+#      - Assembly objects output to src/build/
+#   2. Bootloader (bootloader/) - Optional submodule
+#      - If present, built using bootloader/Makefile
+#      - Completely independent build system
+#   3. Device Tree Blob for QEMU virt machine
+#
+# Main targets:
+#   make all        - Build kernel (+ bootloader if present) and DTB
+#   make run        - Build and run (with bootloader if present, else kernel directly)
+#   make run-kernel - Build and run kernel directly (bypass bootloader)
+#   make clean      - Clean all build artifacts
+#   make doc        - Generate documentation
+#
+# Note: The bootloader is optional. If the submodule is not initialized,
+#       the kernel will build and run independently.
+#==============================================================================
+
+#==============================================================================
+# TOOLCHAIN CONFIGURATION
+#==============================================================================
 TARGET = aarch64-unknown-none
 AS = aarch64-linux-gnu-as
-ASFLAGS = -I./include/asm
+ASFLAGS = -I./$(ASM_INCLUDE)
 LD = rust-lld
 QEMU = qemu-system-aarch64
 VERSION := debug
 
-# File paths
+#==============================================================================
+# PATHS AND SOURCES
+#==============================================================================
 SRC_DIR = src
-ASM_DIR = $(SRC_DIR)/asm
+BUILD_DIR = $(SRC_DIR)/build
+ASM_INCLUDE = $(SRC_DIR)/include/asm
+
 RUST_SRC := $(shell find $(SRC_DIR) -name '*.rs')
-ASM_SRC := $(shell find $(SRC_DIR) -name '*.s')
-LINKER_SCRIPT = linker.ld
-DOC_DIR := doc
+ASM_SRC_S := $(shell find $(SRC_DIR) -name '*.s')
+ASM_SRC_S_CAP := $(shell find $(SRC_DIR) -name '*.S')
 
-# Output filenames
-ASM_OBJS := $(ASM_SRC:.s=.o)
+# Kernel output files (objects go into build directory)
+ASM_OBJS := $(patsubst $(SRC_DIR)/%,$(BUILD_DIR)/%.o,$(ASM_SRC_S)) \
+                   $(patsubst $(SRC_DIR)/%,$(BUILD_DIR)/%.o,$(ASM_SRC_S_CAP))
 CRATE_NAME := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
-KERNEL_OBJ = target/$(TARGET)/$(VERSION)/lib$(CRATE_NAME).a
+RUST_OBJ = target/$(TARGET)/$(VERSION)/lib$(CRATE_NAME).a
 KERNEL_ELF = kernel.elf
+LINKER_SCRIPT = linker.ld
 
-# QEMU options
-QEMU_FLAGS = -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio -kernel $(KERNEL_ELF)
+#==============================================================================
+# BOOTLOADER CONFIGURATION
+#==============================================================================
+BOOTLOADER_DIR = bootloader
+BOOTLOADER_BIN = $(BOOTLOADER_DIR)/bootloader.bin
 
-# Build the kernel
-all: $(KERNEL_ELF)
+# Check if bootloader submodule exists
+BOOTLOADER_EXISTS := $(shell test -d $(BOOTLOADER_DIR) && test -f $(BOOTLOADER_DIR)/Makefile && echo yes || echo no)
 
-# Assemble the boot.s to boot.o
-$(ASM_DIR)/%.o: $(ASM_DIR)/%.s
+#==============================================================================
+# COMMON
+#==============================================================================
+DOC_DIR := doc
+DTB_FILE := virt.dtb
+
+#==============================================================================
+# QEMU CONFIGURATION
+#==============================================================================
+ifeq ($(BOOTLOADER_EXISTS),yes)
+	# Boot with bootloader if present
+	QEMU_FLAGS = -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio \
+				-kernel $(BOOTLOADER_BIN) \
+				-dtb $(DTB_FILE)
+else
+	# Boot kernel directly if no bootloader
+	QEMU_FLAGS = -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio \
+				-kernel $(KERNEL_ELF) \
+				-dtb $(DTB_FILE)
+endif
+
+#==============================================================================
+# BUILD TARGETS
+#==============================================================================
+
+ifeq ($(BOOTLOADER_EXISTS),yes)
+all: $(KERNEL_ELF) $(BOOTLOADER_BIN) $(DTB_FILE)
+	@echo "Build complete: kernel + bootloader"
+else
+all: $(KERNEL_ELF) $(DTB_FILE)
+	@echo "Build complete: kernel only (no bootloader found)"
+endif
+
+$(BUILD_DIR)/%.s.o: $(SRC_DIR)/%.s
+	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
 
-# Compile the Rust kernel to an object file
-$(KERNEL_OBJ): $(RUST_SRC)
+$(BUILD_DIR)/%.S.o: $(SRC_DIR)/%.S
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) $< -o $@
+
+$(RUST_OBJ): $(RUST_SRC)
+	@echo "Building Rust kernel..."
 	cargo build --target $(TARGET)
 
-# Link the kernel object and boot object into an ELF
-$(KERNEL_ELF): $(ASM_OBJS) $(KERNEL_OBJ) $(LINKER_SCRIPT)
-	$(LD) -flavor gnu -T $(LINKER_SCRIPT) -o $@ $(ASM_OBJS) $(KERNEL_OBJ)
+# Link the kernel
+$(KERNEL_ELF): $(ASM_OBJS) $(RUST_OBJ) $(LINKER_SCRIPT)
+	@echo "Linking kernel: $@"
+	$(LD) -flavor gnu -T $(LINKER_SCRIPT) -o $@ $(ASM_OBJS) $(RUST_OBJ)
 
-# Run the kernel with QEMU
-run: $(KERNEL_ELF)
+#------------------------------------------------------------------------------
+# BOOTLOADER BUILD RULES
+#------------------------------------------------------------------------------
+
+# Build bootloader using its own Makefile (if present)
+ifeq ($(BOOTLOADER_EXISTS),yes)
+$(BOOTLOADER_BIN):
+	@echo "Building bootloader..."
+	$(MAKE) -C $(BOOTLOADER_DIR)
+endif
+
+#------------------------------------------------------------------------------
+# COMMON BUILD RULES
+#------------------------------------------------------------------------------
+
+$(DTB_FILE):
+	$(QEMU) -machine virt,gic-version=3,dumpdtb=$@ -cpu cortex-a57
+
+# Run with bootloader
+run: all
 	$(QEMU) $(QEMU_FLAGS)
+
+# Run kernel directly (for testing without bootloader)
+run-kernel: $(KERNEL_ELF) $(DTB_FILE)
+	$(QEMU) -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio \
+			-kernel $(KERNEL_ELF) -dtb $(DTB_FILE)
 
 doc:
 	cargo doc --target $(TARGET) --no-deps --target-dir $(DOC_DIR)
@@ -48,10 +142,25 @@ doc:
 doc-open:
 	cargo doc --target $(TARGET) --no-deps --target-dir $(DOC_DIR) --open
 
-# Clean up build artifacts
-clean:
+clean: clean-kernel clean-bootloader clean-common
+
+clean-kernel:
+	@echo "Cleaning kernel artifacts..."
 	cargo clean
 	rm -rf $(DOC_DIR)
-	rm -f $(ASM_OBJS) $(KERNEL_ELF)
+	rm -rf $(BUILD_DIR)
+	rm -f $(KERNEL_ELF)
 
-.PHONY: all run clean
+clean-bootloader:
+ifeq ($(BOOTLOADER_EXISTS),yes)
+	@echo "Cleaning bootloader artifacts..."
+	$(MAKE) -C $(BOOTLOADER_DIR) clean
+else
+	@echo "No bootloader to clean"
+endif
+
+clean-common:
+	@echo "Cleaning common artifacts..."
+	rm -f $(DTB_FILE)
+
+.PHONY: all run run-kernel doc doc-open clean clean-kernel clean-bootloader clean-common

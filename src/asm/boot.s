@@ -1,4 +1,3 @@
-
 # GIC DIST base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L166
 .equ GICD_BASE_ADDR, 0x08000000
 # GIC REDIST base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L174
@@ -6,16 +5,16 @@
 # UART base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L175
 .equ UART_BASE_ADDR, 0x09000000
 
-.section .text
+.section .text.boot
 
 .global _start
 .type _start, @function
 
 ###############################
 # Kernel entry point
+# x0: The address of the dtb
 ###############################
 _start:
-    nop
     mov x20, x0
     # Enable floating point instructions
     mov x0, #0x300000
@@ -26,7 +25,7 @@ _start:
     # Mask all interrupts
     msr DAIFSet, #0b1111
     # 1. Load the interrupt vector address into VBAR_EL1
-    ldr x0, =evt
+    adr x0, evt
     msr VBAR_EL1, x0
     isb sy
     # 2. Enable GIC
@@ -61,6 +60,7 @@ _start:
     b next
 not_enabled:
     ldr x0, =GICD_BASE_ADDR
+    # Exception do_sync
     bl set_int_priority
 next:
     # 7. Route the interrupt through group 1

@@ -3,44 +3,45 @@
 .equ IS_SVC_MASK, 0x15
 .equ SVC_NR_MASK, 0xFFFF
 
-.section .text
+.section .text.eh
 
 .global evt
-.balign 2048
+.align 11
 
 evt:
+.org 0x0000
 sync0_trampoline:
     b .
 
-.balign 0x80
+.org 0x0080
 irq0_trampoline:
     b .
 
-.balign 0x80
+.org 0x0100
 fiq0_trampoline:
     b .
 
-.balign 0x80
+.org 0x0180
 serror0_trampoline:
     b .
 
-.balign 0x80
+.org 0x0200
 sync_trampoline:
     b sync_handler
 
-.balign 0x80
+.org 0x0280
 irq_trampoline:
     b irq_handler
 
-.balign 0x80
+.org 0x0300
 fiq_trampoline:
     b .
 
-.balign 0x80
+.org 0x0380
 serror_trampoline:
     b .
 
-.balign 0x80
+.org 0x0400
 sync_handler:
     alloc_stack 256
     saveregs

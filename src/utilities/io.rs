@@ -1,6 +1,6 @@
-//! Utilities module
+//! IO Utilities module
 //!
-//! This module provides auxiliary functions. Those functions are intended to be used in any module
+//! This module provides auxiliary functions to interact with io. Those functions are intended to be used in any module
 
 use core::ptr::{read_volatile, write_volatile};
 

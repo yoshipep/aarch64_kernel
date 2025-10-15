@@ -1,36 +1,44 @@
-//! The aarch64 crate
+//! The aarch64_kernel crate
 //!
-//! This crate is an implementation of an aarch64 kernel
+//! This crate is an implementation of an AArch64 bare-metal kernel for learning purposes.
 
 #![no_std]
 #![no_main]
-// Required to handle panics manually when `no_std` is enabled
+
+use crate::drivers::uart::pl011;
 use core::panic::PanicInfo;
 
-pub mod exceptions;
-pub mod gic;
-pub mod irq_safe_mutex;
-pub mod uart;
+// Public modules
+pub mod drivers;
+pub mod ipc;
+pub mod kernel;
 pub mod utilities;
 
 /// Kernel main function
-// no_mangle: Disables Rust's name mangling
+///
+/// This is the entry point for the Rust kernel code, called from assembly after hardware
+/// initialization. It receives the device tree address as a parameter.
+///
+/// # Arguments
+/// * `_fdt_addr` - The address of the Flattened Device Tree (currently unused)
 #[unsafe(no_mangle)]
-// extern "C": Uses C calling convention
 pub extern "C" fn kmain(_fdt_addr: usize) {
-    uart::println(b"Hello, from Rust");
+    pl011::println(b"Hello, from Rust");
     loop {
-        if let Some(ch) = uart::getchar() {
-            uart::print(b"You typed: ");
-            uart::putchar(ch);
-            uart::print(b"\n");
+        if let Some(ch) = pl011::getchar() {
+            pl011::print(b"You typed: ");
+            pl011::putchar(ch);
+            pl011::print(b"\n");
         }
     }
 }
 
-// The ! here specifies that the function doesn't return
+/// Panic handler for no_std environment
+///
+/// This function is called when the kernel panics. Since we're in a bare-metal environment
+/// with no standard library, we must define our own panic behavior.
 #[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    uart::print(b"Panic!\n");
+fn panic(_info: &PanicInfo) -> ! {
+    pl011::print(b"Panic!\n");
     loop {}
 }

@@ -2,7 +2,8 @@
 
 use core::arch::asm;
 
-use crate::{uart, utilities};
+use crate::drivers::uart::pl011;
+use crate::utilities::io;
 
 /// Struct that represents the machine state
 ///
@@ -67,8 +68,8 @@ fn u32_to_str(mut num: u32, buf: &mut [u8; 10]) -> &[u8] {
 pub extern "C" fn do_sync(_regs: *mut Regs, nr: u32) {
     let mut buf = [0u8; 10];
     let nr_str = u32_to_str(nr, &mut buf);
-    uart::print(b"Requested syscall: ");
-    uart::println(nr_str);
+    pl011::print(b"Requested syscall: ");
+    pl011::println(nr_str);
 }
 
 /// IRQ handler
@@ -76,7 +77,7 @@ pub extern "C" fn do_sync(_regs: *mut Regs, nr: u32) {
 pub fn do_irq(id: u32) -> u32 {
     match id {
         30 => {
-            uart::println(b"Timer interrupt!");
+            pl011::println(b"Timer interrupt!");
             // Rearm the timer
             unsafe {
                 asm!(
@@ -89,17 +90,17 @@ pub fn do_irq(id: u32) -> u32 {
         }
         // UART RX interrupt
         33 => unsafe {
-            uart::RX_BUFFER.lock_irqsafe(|rx| {
-                let ch = utilities::read_mmio(0x9000000, 0) as u8;
+            pl011::RX_BUFFER.lock_irqsafe(|rx| {
+                let ch = io::read_mmio(0x9000000, 0) as u8;
                 let _ = rx.push(ch);
             });
-            utilities::write_mmio(0x9000000, 0x44, 1 << 4);
+            io::write_mmio(0x9000000, 0x44, 1 << 4);
         },
         _ => {
             let mut buf = [0u8; 10];
             let id_str = u32_to_str(id, &mut buf);
-            uart::print(b"Unhandled IRQ: ");
-            uart::println(id_str);
+            pl011::print(b"Unhandled IRQ: ");
+            pl011::println(id_str);
         }
     }
     return id; // return the interrupt ID so we can acknowledge it by writting to ICC_EOIR1_EL1
@@ -167,6 +168,6 @@ pub extern "C" fn unimplemented_sync(exception_class: u32) {
         61 => kind = "Profiling exception",
         _ => kind = "Unknown reason",
     }
-    uart::print(b"Unimplemented synchronous exception: ");
-    uart::println(kind.as_bytes());
+    pl011::print(b"Unimplemented synchronous exception: ");
+    pl011::println(kind.as_bytes());
 }

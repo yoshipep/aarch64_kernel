@@ -8,3 +8,4 @@ Cargo.lock
 doc/
 src/build/
 virt.dtb
+*.o

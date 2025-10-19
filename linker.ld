@@ -1,7 +1,8 @@
 ENTRY(_start)
 
 MEMORY {
-    RAM : ORIGIN = 0x40008000, LENGTH = 16M
+    /* Kernel loaded at 0x50000000 by bootloader (from ELF parsing) */
+    RAM : ORIGIN = 0x50000000, LENGTH = 16M
 }
 
 SECTIONS {

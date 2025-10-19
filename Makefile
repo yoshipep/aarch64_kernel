@@ -64,18 +64,19 @@ BOOTLOADER_EXISTS := $(shell test -d $(BOOTLOADER_DIR) && test -f $(BOOTLOADER_D
 #==============================================================================
 DOC_DIR := doc
 DTB_FILE := virt.dtb
+COMBINED_BLOB := combined.bin
 
 #==============================================================================
 # QEMU CONFIGURATION
 #==============================================================================
 ifeq ($(BOOTLOADER_EXISTS),yes)
 	# Boot with bootloader if present
-	QEMU_FLAGS = -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio \
+	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
 				-kernel $(BOOTLOADER_BIN) \
 				-dtb $(DTB_FILE)
 else
 	# Boot kernel directly if no bootloader
-	QEMU_FLAGS = -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio \
+	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
 				-kernel $(KERNEL_ELF) \
 				-dtb $(DTB_FILE)
 endif
@@ -121,6 +122,35 @@ $(BOOTLOADER_BIN):
 endif
 
 #------------------------------------------------------------------------------
+# BLOB BUILD RULES (Bootloader + Kernel combined)
+#------------------------------------------------------------------------------
+
+ifeq ($(BOOTLOADER_EXISTS),yes)
+# Create combined blob: bootloader.bin + kernel.elf
+$(COMBINED_BLOB): $(BOOTLOADER_BIN) $(KERNEL_ELF)
+	@echo "Creating combined blob: bootloader + kernel..."
+	@echo "  Bootloader: $(BOOTLOADER_BIN) (loaded at 0x40080000 by QEMU)"
+	@cp $(BOOTLOADER_BIN) $(COMBINED_BLOB)
+	@truncate -s 4K $(COMBINED_BLOB)
+	@echo "  Kernel ELF: $(KERNEL_ELF) (appended at 4KB offset, loaded to 0x50000000 by bootloader)"
+	@cat $(KERNEL_ELF) >> $(COMBINED_BLOB)
+	@echo -n "  Blob size: "
+	@ls -lh $(COMBINED_BLOB) | awk '{print $$5}'
+	@echo "Blob created successfully!"
+
+# Build blob (depends on bootloader and kernel)
+blob: $(COMBINED_BLOB)
+	@echo "Blob build complete"
+
+# Run the combined blob
+run-blob: $(COMBINED_BLOB) $(DTB_FILE)
+	@echo "Running combined blob (bootloader will load kernel)..."
+	$(QEMU) -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
+			-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE)
+endif
+
+
+#------------------------------------------------------------------------------
 # COMMON BUILD RULES
 #------------------------------------------------------------------------------
 
@@ -162,5 +192,6 @@ endif
 clean-common:
 	@echo "Cleaning common artifacts..."
 	rm -f $(DTB_FILE)
+	rm -f $(COMBINED_BLOB)
 
 .PHONY: all run run-kernel doc doc-open clean clean-kernel clean-bootloader clean-common

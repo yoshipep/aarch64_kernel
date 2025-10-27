@@ -3,9 +3,10 @@ target/
 debug/
 *.pdb
 **/*.rs.bk
-kernel.elf
 Cargo.lock
 doc/
 src/build/
 virt.dtb
 *.o
+*.elf
+*.bin

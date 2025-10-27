@@ -27,7 +27,7 @@
 TARGET = aarch64-unknown-none
 AS = aarch64-linux-gnu-as
 ASFLAGS = -I./$(ASM_INCLUDE)
-LD = rust-lld
+LD = aarch64-linux-gnu-ld
 QEMU = qemu-system-aarch64
 VERSION := debug
 
@@ -72,13 +72,11 @@ COMBINED_BLOB := combined.bin
 ifeq ($(BOOTLOADER_EXISTS),yes)
 	# Boot with bootloader if present
 	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-				-kernel $(BOOTLOADER_BIN) \
-				-dtb $(DTB_FILE)
+				-kernel $(BOOTLOADER_BIN) -dtb $(DTB_FILE) -m 1G
 else
 	# Boot kernel directly if no bootloader
 	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-				-kernel $(KERNEL_ELF) \
-				-dtb $(DTB_FILE)
+				-kernel $(KERNEL_ELF) -dtb $(DTB_FILE)
 endif
 
 #==============================================================================
@@ -86,7 +84,7 @@ endif
 #==============================================================================
 
 ifeq ($(BOOTLOADER_EXISTS),yes)
-all: $(KERNEL_ELF) $(BOOTLOADER_BIN) $(DTB_FILE)
+all: $(KERNEL_ELF) $(BOOTLOADER_BIN) $(COMBINED_BLOB) $(DTB_FILE)
 	@echo "Build complete: kernel + bootloader"
 else
 all: $(KERNEL_ELF) $(DTB_FILE)
@@ -108,7 +106,7 @@ $(RUST_OBJ): $(RUST_SRC)
 # Link the kernel
 $(KERNEL_ELF): $(ASM_OBJS) $(RUST_OBJ) $(LINKER_SCRIPT)
 	@echo "Linking kernel: $@"
-	$(LD) -flavor gnu -T $(LINKER_SCRIPT) -o $@ $(ASM_OBJS) $(RUST_OBJ)
+	$(LD) -T $(LINKER_SCRIPT) -o $@ $(ASM_OBJS) $(RUST_OBJ)
 
 #------------------------------------------------------------------------------
 # BOOTLOADER BUILD RULES
@@ -126,15 +124,21 @@ endif
 #------------------------------------------------------------------------------
 
 ifeq ($(BOOTLOADER_EXISTS),yes)
-# Create combined blob: bootloader.bin + kernel.elf
+# Create combined blob: bootloader.bin + kernel.elf (with alignment for safe struct access)
+# Align to 4096 bytes (page size) - reasonable tradeoff between space and alignment
+KERNEL_ALIGN := 4096
 $(COMBINED_BLOB): $(BOOTLOADER_BIN) $(KERNEL_ELF)
-	@echo "Creating combined blob: bootloader + kernel..."
+	@echo "Creating combined blob: bootloader + kernel (aligned for struct safety)..."
 	@echo "  Bootloader: $(BOOTLOADER_BIN) (loaded at 0x40080000 by QEMU)"
 	@cp $(BOOTLOADER_BIN) $(COMBINED_BLOB)
-	@truncate -s 4K $(COMBINED_BLOB)
-	@echo "  Kernel ELF: $(KERNEL_ELF) (appended at 4KB offset, loaded to 0x50000000 by bootloader)"
+	# Pad to next $(KERNEL_ALIGN)-byte boundary
+	@truncate -s %$(KERNEL_ALIGN) $(COMBINED_BLOB)
+	@KERNEL_OFFSET=$$(stat -c%s $(COMBINED_BLOB)); \
+	 KERNEL_ADDR=$$(printf "0x%x" $$((0x40080000 + KERNEL_OFFSET))); \
+	 echo "  Bootloader padded to: 0x$$(printf %x $$KERNEL_OFFSET) (aligned to $(KERNEL_ALIGN) bytes)"; \
+	 echo "  Kernel ELF: $(KERNEL_ELF) at offset 0x$$(printf %x $$KERNEL_OFFSET) (runtime addr: $$KERNEL_ADDR)"
 	@cat $(KERNEL_ELF) >> $(COMBINED_BLOB)
-	@echo -n "  Blob size: "
+	@echo -n "  Combined blob size: "
 	@ls -lh $(COMBINED_BLOB) | awk '{print $$5}'
 	@echo "Blob created successfully!"
 
@@ -148,7 +152,6 @@ run-blob: $(COMBINED_BLOB) $(DTB_FILE)
 	$(QEMU) -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
 			-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE)
 endif
-
 
 #------------------------------------------------------------------------------
 # COMMON BUILD RULES

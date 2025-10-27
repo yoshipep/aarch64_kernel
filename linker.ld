@@ -1,3 +1,7 @@
+OUTPUT_FORMAT("elf64-littleaarch64")
+
+OUTPUT_ARCH("aarch64")
+
 ENTRY(_start)
 
 MEMORY {
@@ -7,15 +11,21 @@ MEMORY {
 
 SECTIONS {
     . = ORIGIN(RAM);
+    __kernel_start = .;
     .text :
     {
+        __text_start = .;
         *(.text.boot)
         *(.text.*)
+        __text_end = .;
     } > RAM
 
+    __data_start = .;
     .rodata : ALIGN(4K)
     {
+        __rodata_start = .;
         *(.rodata.*)
+        __rodata_end = .;
     } > RAM
 
     .data : ALIGN(4K)
@@ -31,7 +41,9 @@ SECTIONS {
         _bss_end = .;
     } > RAM
 
-    _kernel_end = .;
+    __data_end = .;
+
+    __kernel_end = .;
     . = . + 64K;
     . = ALIGN(64K);
     stack_top = .;

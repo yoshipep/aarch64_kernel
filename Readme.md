@@ -14,7 +14,7 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - Freestanding Rust code (no `std`, no runtime)
 - Custom linker script and boot assembly
 - Hello world over MMIO UART (PL011)
-- IRQ handling (currently only the EL1 NS timer handler is implemented)
+- IRQ handling (currently only the EL1 NS timer handler and UART is implemented)
 - Boots from the [bootloader](https://github.com/yoshipep/aarch64_bootloader)
 
 ---
@@ -37,7 +37,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add aarch64-unknown-none
 ```
 
-🚀 Build & Run
+## 🚀 Build & Run
 
 To compile and run:
 

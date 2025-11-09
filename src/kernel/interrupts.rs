@@ -4,7 +4,7 @@ use core::arch::asm;
 
 use crate::drivers::uart::pl011;
 use crate::utilities::mmio;
-use crate::utilities::print;
+use crate::utilities::print::{print_hex_u8, print_hex_u64, u32_to_str};
 
 /// CPU register state at the time of an exception
 ///
@@ -14,19 +14,16 @@ use crate::utilities::print;
 ///
 /// # Fields
 ///
-/// - `x0-x30`: General-purpose registers
+/// - `x1-x30`: General-purpose registers
 /// - `esr`: Exception Syndrome Register - describes the exception cause
 /// - `elr`: Exception Link Register - return address
 /// - `spsr`: Saved Program Status Register - saved processor state
-/// - `xzr`: Zero register placeholder
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Regs {
     spsr: u64,
-    elr: u64,
     esr: u64,
-    xzr: u64,
-    x0: u64,
+    elr: u64,
     x1: u64,
     x2: u64,
     x3: u64,
@@ -61,20 +58,19 @@ pub struct Regs {
 
 impl Regs {
     /// Register names for iteration
-    const NAMES: [&'static str; 34] = [
-        "x0 ", "x1 ", "x2 ", "x3 ", "x4 ", "x5 ", "x6 ", "x7 ", "x8 ", "x9 ", "x10", "x11", "x12",
-        "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25",
-        "x26", "x27", "x28", "x29", "x30", "esr", "elr", "spsr"
+    const NAMES: [&'static str; 33] = [
+        "x1 ", "x2 ", "x3 ", "x4 ", "x5 ", "x6 ", "x7 ", "x8 ", "x9 ", "x10", "x11", "x12", "x13",
+        "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26",
+        "x27", "x28", "x29", "x30", "esr", "elr", "spsr",
     ];
 
     /// Convert registers to an array for easy iteration
-    pub fn as_array(&self) -> [u64; 34] {
+    pub fn as_array(&self) -> [u64; 33] {
         [
-            self.x0, self.x1, self.x2, self.x3, self.x4, self.x5, self.x6, self.x7, self.x8,
-            self.x9, self.x10, self.x11, self.x12, self.x13, self.x14, self.x15, self.x16,
-            self.x17, self.x18, self.x19, self.x20, self.x21, self.x22, self.x23, self.x24,
-            self.x25, self.x26, self.x27, self.x28, self.x29, self.x30, self.esr, self.elr,
-            self.spsr
+            self.x1, self.x2, self.x3, self.x4, self.x5, self.x6, self.x7, self.x8, self.x9,
+            self.x10, self.x11, self.x12, self.x13, self.x14, self.x15, self.x16, self.x17,
+            self.x18, self.x19, self.x20, self.x21, self.x22, self.x23, self.x24, self.x25,
+            self.x26, self.x27, self.x28, self.x29, self.x30, self.esr, self.elr, self.spsr,
         ]
     }
 
@@ -92,7 +88,7 @@ impl Regs {
         for (name, value) in self.iter() {
             pl011::print(name.as_bytes());
             pl011::print(b": 0x");
-            print::print_hex_u64(value);
+            print_hex_u64(value);
             pl011::print(b"\n");
         }
     }
@@ -108,7 +104,7 @@ fn print_faulting_instr(elr: u64) {
     let addr = (elr & !3) as *const u32;
 
     pl011::print(b"Faulting instruction at 0x");
-    print::print_hex_u64(elr);
+    print_hex_u64(elr);
     pl011::print(b": ");
     unsafe {
         opcode = addr.read_volatile();
@@ -117,10 +113,10 @@ fn print_faulting_instr(elr: u64) {
     for i in 0..4 {
         if i == 0 {
             pl011::print(b"[");
-            print::print_hex_u8((opcode >> (i * 8)) as u8);
+            print_hex_u8((opcode >> (i * 8)) as u8);
             pl011::print(b"]")
         } else {
-            print::print_hex_u8((opcode >> (i * 8)) as u8);
+            print_hex_u8((opcode >> (i * 8)) as u8);
         }
 
         if i < 3 {
@@ -134,7 +130,6 @@ fn print_faulting_instr(elr: u64) {
 /// Prints all CPU registers from the saved register state
 #[inline(always)]
 fn print_regs(regs: &Regs) {
-    // Print register dump
     regs.print();
 }
 
@@ -192,12 +187,13 @@ pub extern "C" fn do_bad_serror(regs: &Regs) -> ! {
 
 /// Synchronous exception handler
 #[unsafe(no_mangle)]
-pub extern "C" fn do_sync(nr: u32) -> u64 {
+pub extern "C" fn do_sync(id: u32) {
+    let nr_str;
     let mut buf = [0u8; 10];
-    let nr_str = print::u32_to_str(nr, &mut buf);
+
+    nr_str = u32_to_str(id, &mut buf);
     pl011::print(b"Requested syscall: ");
     pl011::println(nr_str);
-    return 0;
 }
 
 /// IRQ handler
@@ -211,7 +207,7 @@ pub fn do_irq(id: u32) -> u32 {
                 asm!(
                     "mrs x0, CNTFRQ_EL0",
                     "msr CNTP_TVAL_EL0, x0",
-                    "isb",
+                    "isb sy",
                     options(nostack, nomem)
                 );
             }
@@ -226,7 +222,7 @@ pub fn do_irq(id: u32) -> u32 {
         }
         _ => {
             let mut buf = [0u8; 10];
-            let id_str = print::u32_to_str(id, &mut buf);
+            let id_str = u32_to_str(id, &mut buf);
             pl011::print(b"Unhandled IRQ: ");
             pl011::println(id_str);
         }
@@ -288,10 +284,7 @@ pub extern "C" fn unimplemented_sync(exception_class: u32) {
     pl011::println(kind.as_bytes());
 }
 
-/// Handles FIQ (Fast Interrupt Request) from the current exception level
-///
-/// Called when a fast interrupt request is received. Prints diagnostic
-/// information and panics (as FIQ handling is not yet implemented).
+/// FIQ handler
 #[unsafe(no_mangle)]
 pub extern "C" fn do_fiq(regs: &Regs) -> ! {
     pl011::println(b"FIQ handler");
@@ -300,10 +293,7 @@ pub extern "C" fn do_fiq(regs: &Regs) -> ! {
     panic!();
 }
 
-/// Handles SError (System Error) from the current exception level
-///
-/// Called when a system error occurs (e.g., asynchronous external abort).
-/// Prints diagnostic information and panics.
+/// SError handler
 #[unsafe(no_mangle)]
 pub extern "C" fn do_serror(regs: &Regs) -> ! {
     pl011::println(b"SError handler");

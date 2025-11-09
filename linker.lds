@@ -1,3 +1,5 @@
+#include "constants.h"
+
 OUTPUT_FORMAT("elf64-littleaarch64")
 
 OUTPUT_ARCH("aarch64")
@@ -44,7 +46,7 @@ SECTIONS {
     __data_end = .;
 
     __kernel_end = .;
-    . = . + 64K;
-    . = ALIGN(64K);
+    . = . + STACK_SIZE;
+    . = ALIGN(4K);
     stack_top = .;
 }

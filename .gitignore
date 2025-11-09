@@ -10,3 +10,4 @@ virt.dtb
 *.o
 *.elf
 *.bin
+*.tmp

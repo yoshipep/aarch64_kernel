@@ -2,7 +2,7 @@
 
 use core::arch::asm;
 
-use crate::utilities::io::{clear_mmio_bits, read_mmio, set_mmio_bits, write_mmio};
+use crate::utilities::mmio;
 
 /* --- GICD (Distributor) Constants --- */
 /// Distributor Control Register
@@ -49,9 +49,9 @@ pub static mut AFFINITY_ENABLED: bool = false;
 #[unsafe(no_mangle)]
 pub unsafe fn init_gic_distributor(dist_base: usize) {
     unsafe {
-        set_mmio_bits(dist_base, GICD_CTLR, GICD_CTLR_GRP1S | GICD_CTLR_GRP1NS);
+        mmio::set_mmio_bits32(dist_base, GICD_CTLR, GICD_CTLR_GRP1S | GICD_CTLR_GRP1NS);
         asm!("dsb sy", options(nostack, nomem));
-        let final_ctlr = read_mmio(dist_base, GICD_CTLR);
+        let final_ctlr = mmio::read_mmio32(dist_base, GICD_CTLR);
         AFFINITY_ENABLED = (final_ctlr & GICD_CTLR_ARE_S) != 0;
         asm!("dsb sy", options(nostack, nomem));
     }
@@ -61,13 +61,9 @@ pub unsafe fn init_gic_distributor(dist_base: usize) {
 #[unsafe(no_mangle)]
 pub unsafe fn init_gic_redistributor(rd_base: usize) {
     unsafe {
-        clear_mmio_bits(rd_base, GICR_WAKER, GICR_WAKER_PSLEEP);
+        mmio::clear_mmio_bits32(rd_base, GICR_WAKER, GICR_WAKER_PSLEEP);
         asm!("dsb sy", options(nostack, nomem));
-        loop {
-            if (read_mmio(rd_base, GICR_WAKER) & GICR_WAKER_CASLEEP) == 0 {
-                break;
-            }
-        }
+        while (mmio::read_mmio32(rd_base, GICR_WAKER) & GICR_WAKER_CASLEEP) != 0 {}
     }
 }
 
@@ -123,11 +119,11 @@ pub unsafe fn set_int_priority(rd_base: usize, id: u32, prio: u8) {
         let byte_index_in_reg = id % 4;
         let bit_shift = byte_index_in_reg * 8;
         let prio_reg_addr = sgi_base + GICR_IPRIORITYR + reg_offset;
-        let mut reg_val = read_mmio(prio_reg_addr, 0);
+        let mut reg_val = mmio::read_mmio32(prio_reg_addr, 0);
         let mask: u32 = !(0xFF << bit_shift);
         reg_val &= mask;
         reg_val |= (prio as u32) << bit_shift;
-        write_mmio(prio_reg_addr, 0, reg_val);
+        mmio::write_mmio32(prio_reg_addr, 0, reg_val);
         asm!("dsb sy", options(nostack, nomem));
     }
 }
@@ -138,7 +134,7 @@ pub unsafe fn set_int_priority(rd_base: usize, id: u32, prio: u8) {
 #[unsafe(no_mangle)]
 pub unsafe fn set_int_grp(rd_base: usize, id: u32) {
     unsafe {
-        set_mmio_bits(rd_base + GICR_SGI_BASE, GICR_IGROUPR0, 1 << id);
+        mmio::set_mmio_bits32(rd_base + GICR_SGI_BASE, GICR_IGROUPR0, 1 << id);
         asm!("dsb sy", options(nostack, nomem));
     }
 }
@@ -149,7 +145,7 @@ pub unsafe fn set_int_grp(rd_base: usize, id: u32) {
 #[unsafe(no_mangle)]
 pub unsafe fn enable_int(rd_base: usize, id: u32) {
     unsafe {
-        set_mmio_bits(rd_base + GICR_SGI_BASE, GICR_ISENABLER0, 1 << id);
+        mmio::set_mmio_bits32(rd_base + GICR_SGI_BASE, GICR_ISENABLER0, 1 << id);
         asm!("dsb sy", options(nostack, nomem));
     }
 }
@@ -165,11 +161,11 @@ pub unsafe fn set_spi_priority(dist_base: usize, id: u32, prio: u8) {
         let byte_index_in_reg = id % 4;
         let bit_shift = byte_index_in_reg * 8;
         let prio_reg_addr = dist_base + GICD_IPRIORITYR + reg_offset;
-        let mut reg_val = read_mmio(prio_reg_addr, 0);
+        let mut reg_val = mmio::read_mmio32(prio_reg_addr, 0);
         let mask: u32 = !(0xFF << bit_shift);
         reg_val &= mask;
         reg_val |= (prio as u32) << bit_shift;
-        write_mmio(prio_reg_addr, 0, reg_val);
+        mmio::write_mmio32(prio_reg_addr, 0, reg_val);
         asm!("dsb sy", options(nostack, nomem));
     }
 }
@@ -184,10 +180,10 @@ pub unsafe fn set_spi_trigger(dist_base: usize, id: u32) {
         let reg_offset = (reg_index * 4) as usize;
         let bit_shift = (id % 16) * 2;
         let cfg_reg_addr = dist_base + GICD_ICFGR + reg_offset;
-        let mut reg_val = read_mmio(cfg_reg_addr, 0);
+        let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
         let mask: u32 = !(0b11 << bit_shift);
         reg_val &= mask;
-        write_mmio(cfg_reg_addr, 0, reg_val);
+        mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
         asm!("dsb sy", options(nostack, nomem));
     }
 }
@@ -202,7 +198,7 @@ pub unsafe fn enable_spi(dist_base: usize, id: u32) {
         let reg_offset = (reg_index * 4) as usize;
         let enabler_reg_addr = dist_base + GICD_ISENABLER + reg_offset;
         let bit_to_set = 1 << (id % 32);
-        write_mmio(enabler_reg_addr, 0, bit_to_set);
+        mmio::write_mmio32(enabler_reg_addr, 0, bit_to_set);
         asm!("dsb sy", options(nostack, nomem));
     }
 }
@@ -231,7 +227,7 @@ pub unsafe fn set_spi_group(dist_base: usize, id: u32) {
         let reg_offset = (reg_index * 4) as usize;
         let group_reg_addr = dist_base + GICD_IGROUPR + reg_offset;
         let bit_to_set = 1 << (id % 32);
-        set_mmio_bits(group_reg_addr, 0, bit_to_set);
+        mmio::set_mmio_bits32(group_reg_addr, 0, bit_to_set);
         asm!("dsb sy", options(nostack, nomem));
     }
 }

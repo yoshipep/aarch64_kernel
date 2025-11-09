@@ -19,11 +19,10 @@
 //! prevent race conditions and deadlocks, it is protected by the interrupt safe `Mutex` from
 //! `crate::irq_safe_mutex`
 
-use core::ptr::write_volatile;
 use core::sync::atomic::AtomicUsize;
 
 use crate::ipc::irq_safe_mutex::Mutex;
-use crate::utilities::io;
+use crate::utilities::mmio;
 use core::sync::atomic::Ordering;
 
 /// The size of the circular buffer used for receiving UART data
@@ -105,6 +104,7 @@ struct UartPl011 {
 const DR_OFF: usize = 0x00;
 const FR_OFF: usize = 0x18;
 const FR_BUSY: u32 = 1 << 3;
+const FR_TXFE: u32 = 1 << 5;
 const IBRD_OFF: usize = 0x24;
 const FBRD_OFF: usize = 0x28;
 const LCR_OFF: usize = 0x2c;
@@ -112,9 +112,11 @@ const LCR_FEN: u32 = 1 << 4;
 const LCR_STP2: u32 = 1 << 3;
 const CR_OFF: usize = 0x30;
 const CR_UARTEN: u32 = 1 << 0;
-const CR_TXEN: u32 = 1 << 8;
+const CR_RXEN: u32 = 1 << 9;
 const IMSC_OFF: usize = 0x38;
 const IMSC_RXIM: u32 = 1 << 4;
+pub const ICR_OFF: usize = 0x44;
+pub const ICR_RXIC: u32 = 1 << 4;
 const DMACR_OFF: usize = 0x48;
 
 /// The global, mutable instance representing the system's UART device
@@ -147,24 +149,16 @@ pub fn init_uart(base_addr: *mut u32, base_clock: u32, baudrate: u32) {
 #[unsafe(no_mangle)]
 pub fn configure_uart() {
     let mut lcr_val: u32 = 0;
-    let cr_val;
 
     // 1. Disable the UART
     unsafe {
-        io::write_mmio(UART.base_addr as usize, CR_OFF, 0);
+        mmio::write_mmio32(UART.base_addr as usize, CR_OFF, 0);
+        // 2. Wait for the end of TX
+        while (mmio::read_mmio32(UART.base_addr as usize, FR_OFF) & FR_BUSY) != 0 {}
+        // 3.Flush RX/TX fifos
+        mmio::clear_mmio_bits32(UART.base_addr as usize, LCR_OFF, LCR_FEN);
     }
 
-    // 2. Wait for the end of TX
-    loop {
-        if uart_ready() {
-            break;
-        }
-    }
-
-    // 3.Flush TX fifo
-    unsafe {
-        io::write_mmio(UART.base_addr as usize, LCR_OFF, !LCR_FEN);
-    }
     // 4. Set speed
     uart_set_speed();
     // 5. Configure the data frame format
@@ -175,32 +169,18 @@ pub fn configure_uart() {
         if UART.stop_bits == 2 {
             lcr_val |= LCR_STP2;
         }
+        // 6 Enable FIFOs
+        lcr_val |= LCR_FEN;
     }
 
     unsafe {
-        io::write_mmio(UART.base_addr as usize, LCR_OFF, lcr_val);
-    }
-    // 6. Enable RX interrupt
-    unsafe {
-        io::write_mmio(UART.base_addr as usize, IMSC_OFF, 0x00);
-        io::set_mmio_bits(UART.base_addr as usize, IMSC_OFF, IMSC_RXIM);
-    }
-    // 7. Disable DMA
-    unsafe {
-        io::write_mmio(UART.base_addr as usize, DMACR_OFF, 0x00);
-    }
-    // 8. Enable TX and UART
-    unsafe {
-        cr_val = CR_UARTEN | CR_TXEN | (1 << 9);
-        io::set_mmio_bits(UART.base_addr as usize, CR_OFF, cr_val);
-    }
-}
-
-/// Checks if the UART is busy transmitting data
-#[unsafe(no_mangle)]
-fn uart_ready() -> bool {
-    unsafe {
-        return (io::read_mmio(UART.base_addr as usize, FR_OFF) & FR_BUSY) == 0;
+        mmio::write_mmio32(UART.base_addr as usize, LCR_OFF, lcr_val);
+        // 7. Enable RX interrupt
+        mmio::set_mmio_bits32(UART.base_addr as usize, IMSC_OFF, IMSC_RXIM);
+        // 8. Disable DMA
+        mmio::write_mmio32(UART.base_addr as usize, DMACR_OFF, 0x01);
+        // 9. Enable RX and UART
+        mmio::set_mmio_bits32(UART.base_addr as usize, CR_OFF, CR_UARTEN | CR_RXEN);
     }
 }
 
@@ -210,8 +190,8 @@ fn uart_set_speed() {
 
     unsafe {
         baud_div = 4 * UART.base_clock / UART.baudrate;
-        io::write_mmio(UART.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
-        io::write_mmio(UART.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
+        mmio::write_mmio32(UART.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
+        mmio::write_mmio32(UART.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
     }
 }
 
@@ -219,22 +199,15 @@ fn uart_set_speed() {
 ///
 /// This function will block and spin until the UART's TX FIFO has space
 pub fn putchar(c: u8) {
-    let addr;
-
     unsafe {
-        loop {
-            if (io::read_mmio(UART.base_addr as usize, FR_OFF) & (1 << 5)) == 0 {
-                break;
-            }
-        }
-        addr = UART.base_addr as *mut u8;
-        write_volatile(addr.add(DR_OFF), c);
+        while (mmio::read_mmio32(UART.base_addr as usize, FR_OFF) & FR_TXFE) != 0 {}
+        mmio::write_mmio32(UART.base_addr as usize, DR_OFF, c as u32);
     }
 }
 
 /// Reads a single byte from the interrupt-driven RX buffer
 pub fn getchar() -> Option<u8> {
-    RX_BUFFER.lock_irqsafe(|rx| rx.pop())
+    return RX_BUFFER.lock_irqsafe(|rx| rx.pop());
 }
 
 /// Prints a byte slice to the UART

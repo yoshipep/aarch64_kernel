@@ -1,3 +1,4 @@
 //! Utilities and helper functions
 
-pub mod io;
+pub mod mmio;
+pub mod print;

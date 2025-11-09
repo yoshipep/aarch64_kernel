@@ -25,30 +25,37 @@
 # TOOLCHAIN CONFIGURATION
 #==============================================================================
 TARGET = aarch64-unknown-none
+CC = aarch64-linux-gnu-gcc-14
+CFLAGS = -c -I$(INCLUDE_DIR) -x assembler-with-cpp
 AS = aarch64-linux-gnu-as
-ASFLAGS = -I./$(ASM_INCLUDE)
-LD = aarch64-linux-gnu-ld
+ASFLAGS = -I$(INCLUDE_DIR)
+CPP = aarch64-linux-gnu-cpp-14
+CPPFLAGS = -I$(INCLUDE_DIR)
+OBJCOPY = aarch64-linux-gnu-objcopy
 QEMU = qemu-system-aarch64
 VERSION := debug
+LD = aarch64-linux-gnu-ld
 
 #==============================================================================
 # PATHS AND SOURCES
 #==============================================================================
-SRC_DIR = src
-BUILD_DIR = $(SRC_DIR)/build
-ASM_INCLUDE = $(SRC_DIR)/include/asm
+SRC_DIR := src
+INCLUDE_DIR := include
+BUILD_DIR := build
+ASM_DIR := $(SRC_DIR)/asm
 
 RUST_SRC := $(shell find $(SRC_DIR) -name '*.rs')
 ASM_SRC_S := $(shell find $(SRC_DIR) -name '*.s')
 ASM_SRC_S_CAP := $(shell find $(SRC_DIR) -name '*.S')
 
 # Kernel output files (objects go into build directory)
-ASM_OBJS := $(patsubst $(SRC_DIR)/%,$(BUILD_DIR)/%.o,$(ASM_SRC_S)) \
-                   $(patsubst $(SRC_DIR)/%,$(BUILD_DIR)/%.o,$(ASM_SRC_S_CAP))
+ASM_OBJS := $(patsubst %,$(BUILD_DIR)/%.o,$(ASM_SRC_S)) \
+            $(patsubst %,$(BUILD_DIR)/%.o,$(ASM_SRC_S_CAP))
 CRATE_NAME := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
-RUST_OBJ = target/$(TARGET)/$(VERSION)/lib$(CRATE_NAME).a
+RUST_OBJ := target/$(TARGET)/debug/lib$(CRATE_NAME).a
+OBJS := $(ASM_OBJS) $(RUST_OBJ)
 KERNEL_ELF = kernel.elf
-LINKER_SCRIPT = linker.ld
+LINKER_SCRIPT = linker.lds
 
 #==============================================================================
 # BOOTLOADER CONFIGURATION
@@ -106,7 +113,7 @@ $(RUST_OBJ): $(RUST_SRC)
 # Link the kernel
 $(KERNEL_ELF): $(ASM_OBJS) $(RUST_OBJ) $(LINKER_SCRIPT)
 	@echo "Linking kernel: $@"
-	$(LD) -T $(LINKER_SCRIPT) -o $@ $(ASM_OBJS) $(RUST_OBJ)
+	$(LD) -T $(LINKER_SCRIPT).tmp -o $@ $(ASM_OBJS) $(RUST_OBJ)
 
 #------------------------------------------------------------------------------
 # BOOTLOADER BUILD RULES
@@ -156,13 +163,23 @@ endif
 #------------------------------------------------------------------------------
 # COMMON BUILD RULES
 #------------------------------------------------------------------------------
-
 $(DTB_FILE):
 	$(QEMU) -machine virt,gic-version=3,dumpdtb=$@ -cpu cortex-a57
 
 # Run with bootloader
 run: all
 	$(QEMU) $(QEMU_FLAGS)
+
+$(LINKER_SCRIPT).tmp: $(LINKER_SCRIPT) $(INCLUDE_DIR)/asm/constants.h
+	$(CPP) $(CPPFLAGS) -P -C $< -o $@
+
+$(BUILD_DIR)/%.s.o: %.s
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) $< -o $@
+
+$(BUILD_DIR)/%.S.o: %.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $< -o $@
 
 # Run kernel directly (for testing without bootloader)
 run-kernel: $(KERNEL_ELF) $(DTB_FILE)

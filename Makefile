@@ -157,7 +157,7 @@ blob: $(COMBINED_BLOB)
 run-blob: $(COMBINED_BLOB) $(DTB_FILE)
 	@echo "Running combined blob (bootloader will load kernel)..."
 	$(QEMU) -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-			-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE)
+			-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE) -m 1G
 endif
 
 #------------------------------------------------------------------------------

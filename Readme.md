@@ -15,6 +15,7 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - Custom linker script and boot assembly
 - Hello world over MMIO UART (PL011)
 - IRQ handling (currently only the EL1 NS timer handler is implemented)
+- Boots from the [bootloader](https://github.com/yoshipep/aarch64_bootloader)
 
 ---
 

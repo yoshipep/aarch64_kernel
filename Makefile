@@ -79,11 +79,11 @@ COMBINED_BLOB := combined.bin
 ifeq ($(BOOTLOADER_EXISTS),yes)
 	# Boot with bootloader if present
 	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-				-kernel $(BOOTLOADER_BIN) -dtb $(DTB_FILE) -m 1G
+				-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE) -m 1G
 else
 	# Boot kernel directly if no bootloader
 	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-				-kernel $(KERNEL_ELF) -dtb $(DTB_FILE)
+				-kernel $(KERNEL_ELF) -dtb $(DTB_FILE) -m 1G
 endif
 
 #==============================================================================
@@ -111,7 +111,7 @@ $(RUST_OBJ): $(RUST_SRC)
 	cargo build --target $(TARGET)
 
 # Link the kernel
-$(KERNEL_ELF): $(ASM_OBJS) $(RUST_OBJ) $(LINKER_SCRIPT)
+$(KERNEL_ELF): $(ASM_OBJS) $(RUST_OBJ) $(LINKER_SCRIPT).tmp
 	@echo "Linking kernel: $@"
 	$(LD) -T $(LINKER_SCRIPT).tmp -o $@ $(ASM_OBJS) $(RUST_OBJ)
 
@@ -138,7 +138,6 @@ $(COMBINED_BLOB): $(BOOTLOADER_BIN) $(KERNEL_ELF)
 	@echo "Creating combined blob: bootloader + kernel (aligned for struct safety)..."
 	@echo "  Bootloader: $(BOOTLOADER_BIN) (loaded at 0x40080000 by QEMU)"
 	@cp $(BOOTLOADER_BIN) $(COMBINED_BLOB)
-	# Pad to next $(KERNEL_ALIGN)-byte boundary
 	@truncate -s %$(KERNEL_ALIGN) $(COMBINED_BLOB)
 	@KERNEL_OFFSET=$$(stat -c%s $(COMBINED_BLOB)); \
 	 KERNEL_ADDR=$$(printf "0x%x" $$((0x40080000 + KERNEL_OFFSET))); \
@@ -170,7 +169,7 @@ $(DTB_FILE):
 run: all
 	$(QEMU) $(QEMU_FLAGS)
 
-$(LINKER_SCRIPT).tmp: $(LINKER_SCRIPT) $(INCLUDE_DIR)/asm/constants.h
+$(LINKER_SCRIPT).tmp: $(LINKER_SCRIPT) $(INCLUDE_DIR)
 	$(CPP) $(CPPFLAGS) -P -C $< -o $@
 
 $(BUILD_DIR)/%.s.o: %.s
@@ -213,5 +212,7 @@ clean-common:
 	@echo "Cleaning common artifacts..."
 	rm -f $(DTB_FILE)
 	rm -f $(COMBINED_BLOB)
+	rm -f $(LINKER_SCRIPT).tmp
+
 
 .PHONY: all run run-kernel doc doc-open clean clean-kernel clean-bootloader clean-common

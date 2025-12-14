@@ -1,4 +1,5 @@
 #include "asm/asmdefs.h"
+#include "asm/system.h"
 
 /* GIC DIST base address: https://github.com/qemu/qemu/blob/master/hw/arm/virt.c#L166 */
 .equ GICD_BASE_ADDR, 0x08000000
@@ -19,9 +20,10 @@ ENTRY(_start)
     /* Mask all interrupts */
     msr DAIFSet, #0b1111
     /* Enable floating point instructions */
-    mov x0, #0x300000
+    ldr x0, =(CPACR_EL1_FPEN0 | CPACR_EL1_FPEN1)
     msr CPACR_EL1, x0
     isb sy
+    /* Set up stack */
     ldr x30, =stack_top
     mov sp, x30
     /* 1. Load the interrupt vector address into VBAR_EL1 */

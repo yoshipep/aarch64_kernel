@@ -19,10 +19,9 @@
 //! prevent race conditions and deadlocks, it is protected by the interrupt safe `Mutex` from
 //! `crate::irq_safe_mutex`
 
-use core::sync::atomic::AtomicUsize;
-
 use crate::ipc::irq_safe_mutex::Mutex;
 use crate::utilities::mmio;
+use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 
 /// The size of the circular buffer used for receiving UART data

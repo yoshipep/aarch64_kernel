@@ -19,6 +19,7 @@
 ENTRY(_start)
     /* Mask all interrupts */
     msr DAIFSet, #0b1111
+    mov x8, x0
     /* Enable floating point instructions */
     ldr x0, =(CPACR_EL1_FPEN0 | CPACR_EL1_FPEN1)
     msr CPACR_EL1, x0
@@ -30,7 +31,10 @@ ENTRY(_start)
     adr x0, evt
     msr VBAR_EL1, x0
     isb sy
-    /* 2. Enable GIC */
+    /* 2. Parse the dtb and initialize found devices */
+    mov x0, x8
+    bl parse_dtb
+    /* 3. Enable GIC */
     ldr x0, =GICD_BASE_ADDR
     bl init_gic_distributor
     mov x0, #0x0
@@ -38,18 +42,18 @@ ENTRY(_start)
     isb sy
     ldr x0, =GICR_BASE_ADDR
     bl init_gic_redistributor
-    /* 3. Enable system register access ICC_SRE_EL1 */
+    /* 4. Enable system register access ICC_SRE_EL1 */
     mrs x0, ICC_SRE_EL1
     orr x0, x0, #1
     msr ICC_SRE_EL1, x0
     isb sy
-    /* 4. Set priority mask */
+    /* 5. Set priority mask */
     mov x0, #0xff
     bl set_priority_mask
-    /* 5. Enable Group 1 ints */
+    /* 6. Enable Group 1 ints */
     bl enable_grp0_ints
     bl enable_grp1_ints
-    /* 6. Set a priority level for the timer */
+    /* 7. Set a priority level for the timer */
     mov w1, #30
     mov w2, #0x80
     ldr x0, =AFFINITY_ENABLED
@@ -62,11 +66,11 @@ not_enabled:
     ldr x0, =GICD_BASE_ADDR
     bl set_int_priority
 next:
-    /* 7. Route the interrupt through group 1 */
+    /* 8. Route the interrupt through group 1 */
     ldr x0, =GICR_BASE_ADDR
     mov w1, #30
     bl set_int_grp
-    /* 8. Enable the interrupt */
+    /* 9. Enable the interrupt */
     ldr x0, =GICR_BASE_ADDR
     mov w1, #30
     bl enable_int

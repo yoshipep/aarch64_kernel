@@ -10,12 +10,16 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 
 ## 🧱 Features (so far)
 
-- Runs on `qemu-system-aarch64` using the `virt` machine
+- Runs on `qemu-system-aarch64` using the `virt` machine (Cortex-A57, GICv3)
 - Freestanding Rust code (no `std`, no runtime)
 - Custom linker script and boot assembly
-- Hello world over MMIO UART (PL011)
-- IRQ handling (currently only the EL1 NS timer handler and UART is implemented)
 - Boots from the [bootloader](https://github.com/yoshipep/aarch64_bootloader)
+- **Device Tree Blob (DTB) parsing** — discovers hardware at boot by walking the flattened device tree. Devices register a `compatible` string and a setup function in a static match table, similar to Linux's `platform_driver` model
+- **GICv3 interrupt controller** — full driver for the Distributor (SPIs) and Redistributor (PPIs/SGIs), with support for priority, group, trigger mode (level/edge), and affinity routing
+- **PL011 UART driver** — polling TX, interrupt-driven RX with an IRQ-safe circular buffer. Base address and clock frequency discovered from the DTB
+- **ARM Generic Timer** — non-secure physical timer (EL1) with millisecond-granularity arming. Interrupt configured as a PPI through the GIC redistributor
+- **Exception handling** — full vector table with handlers for synchronous exceptions (SVC), IRQs, FIQs, and SErrors. Unimplemented exception classes are decoded and reported
+- **IRQ-safe mutex** — spinlock that masks interrupts while held, preventing deadlocks between main code and interrupt handlers
 
 ---
 

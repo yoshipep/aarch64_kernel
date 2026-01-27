@@ -19,10 +19,16 @@
 //! prevent race conditions and deadlocks, it is protected by the interrupt safe `Mutex` from
 //! `crate::irq_safe_mutex`
 
-use crate::ipc::irq_safe_mutex::Mutex;
-use crate::utilities::mmio;
+use core::ptr::addr_of_mut;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
+
+use crate::drivers::gic::gicv3;
+use crate::ipc::irq_safe_mutex::Mutex;
+use crate::kernel::device;
+use crate::kernel::dtb;
+use crate::utilities::convert;
+use crate::utilities::mmio;
 
 /// The size of the circular buffer used for receiving UART data
 const UART_BUFFER_SIZE: usize = 256;
@@ -56,7 +62,6 @@ impl UartBuffer {
     pub fn push(&mut self, byte: u8) -> bool {
         let head = self.head.load(Ordering::Relaxed);
         let next_head = (head + 1) % UART_BUFFER_SIZE;
-
         if next_head == self.tail.load(Ordering::Relaxed) {
             return false;
         }
@@ -71,7 +76,6 @@ impl UartBuffer {
         let byte;
         let next_tail;
         let tail = self.tail.load(Ordering::Relaxed);
-
         if self.head.load(Ordering::Relaxed) == tail {
             return None;
         }
@@ -119,25 +123,112 @@ pub const ICR_RXIC: u32 = 1 << 4;
 const DMACR_OFF: usize = 0x48;
 
 /// The global, mutable instance representing the system's UART device
-static mut UART: UartPl011 = UartPl011 {
-    base_addr: core::ptr::null_mut(),
-    base_clock: 0,
-    baudrate: 0,
-    data_bits: 0,
-    stop_bits: 0,
-};
+static mut UART: UartPl011 = UartPl011::new();
 
-/// Initializes the global UART struct with hardware-specific details
-#[unsafe(no_mangle)]
-pub fn init_uart(base_addr: *mut u32, base_clock: u32, baudrate: u32) {
-    unsafe {
-        UART = UartPl011 {
-            base_addr: base_addr,
-            base_clock: base_clock,
-            baudrate: baudrate,
+impl UartPl011 {
+    /// Const constructor for static initialization
+    pub const fn new() -> Self {
+        Self {
+            base_addr: core::ptr::null_mut(),
+            base_clock: 0,
+            baudrate: 115200,
             data_bits: 8,
             stop_bits: 1,
-        };
+        }
+    }
+
+    /// Initialize with hardware-specific details
+    pub fn init(&mut self, base_addr: *mut u32, base_clock: u32) {
+        self.base_addr = base_addr;
+        self.base_clock = base_clock;
+    }
+
+    /// Set baud rate
+    pub fn set_baudrate(&mut self, baudrate: u32) {
+        self.baudrate = baudrate;
+    }
+
+    /// Set data bits
+    pub fn set_data_bits(&mut self, data_bits: u8) {
+        self.data_bits = data_bits;
+    }
+
+    /// Set stop bits
+    pub fn set_stop_bits(&mut self, stop_bits: u8) {
+        self.stop_bits = stop_bits;
+    }
+
+    /// Configure the UART hardware registers
+    pub fn configure(&self) {
+        // 1. Disable the UART
+        mmio::write_mmio32(self.base_addr as usize, CR_OFF, 0);
+        // 2. Wait for the end of TX
+        while (mmio::read_mmio32(self.base_addr as usize, FR_OFF) & FR_BUSY) != 0 {}
+        // 3. Flush RX/TX fifos
+        mmio::clear_mmio_bits32(self.base_addr as usize, LCR_OFF, LCR_FEN);
+
+        // 4. Set speed
+        self.set_speed();
+
+        // 5. Configure the data frame format
+        let mut lcr_val: u32 = 0;
+        // 5.1 Word length: bits 5 and 6
+        lcr_val |= ((self.data_bits as u32 - 1) & 0x3) << 5;
+        // 5.2 Use 1 or 2 stop bits: bit LCR_STP2
+        if self.stop_bits == 2 {
+            lcr_val |= LCR_STP2;
+        }
+        // 6. Enable FIFOs
+        lcr_val |= LCR_FEN;
+
+        mmio::write_mmio32(self.base_addr as usize, LCR_OFF, lcr_val);
+        // 7. Enable RX interrupt
+        mmio::set_mmio_bits32(self.base_addr as usize, IMSC_OFF, IMSC_RXIM);
+        // 8. Disable DMA
+        mmio::write_mmio32(self.base_addr as usize, DMACR_OFF, 0x01);
+        // 9. Enable RX and UART
+        mmio::set_mmio_bits32(self.base_addr as usize, CR_OFF, CR_UARTEN | CR_RXEN);
+    }
+
+    /// Set baud rate divisor registers
+    fn set_speed(&self) {
+        let baud_div = 4 * self.base_clock / self.baudrate;
+        mmio::write_mmio32(self.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
+        mmio::write_mmio32(self.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
+    }
+
+    /// Write a single byte
+    pub fn putchar(&self, c: u8) {
+        while (mmio::read_mmio32(self.base_addr as usize, FR_OFF) & FR_TXFE) != 0 {}
+        mmio::write_mmio32(self.base_addr as usize, DR_OFF, c as u32);
+    }
+}
+
+/// Initializes the global UART struct with hardware-specific details
+fn init_uart(base_addr: *mut u32, base_clock: u32) {
+    unsafe {
+        (*addr_of_mut!(UART)).init(base_addr, base_clock);
+    }
+}
+
+/// Sets the baud rate (call before configure_uart)
+pub fn set_baudrate(baudrate: u32) {
+    unsafe {
+        (*addr_of_mut!(UART)).set_baudrate(baudrate);
+    }
+}
+
+/// Sets the number of data bits (call before configure_uart)
+pub fn set_data_bits(data_bits: u8) {
+    unsafe {
+        (*addr_of_mut!(UART)).set_data_bits(data_bits);
+    }
+}
+
+/// Sets the number of stop bits (call before configure_uart)
+pub fn set_stop_bits(stop_bits: u8) {
+    unsafe {
+        (*addr_of_mut!(UART)).set_stop_bits(stop_bits);
     }
 }
 
@@ -147,50 +238,8 @@ pub fn init_uart(base_addr: *mut u32, base_clock: u32, baudrate: u32) {
 /// setting the baud rate, data format and enabling interrupts
 #[unsafe(no_mangle)]
 pub fn configure_uart() {
-    let mut lcr_val: u32 = 0;
-
-    // 1. Disable the UART
     unsafe {
-        mmio::write_mmio32(UART.base_addr as usize, CR_OFF, 0);
-        // 2. Wait for the end of TX
-        while (mmio::read_mmio32(UART.base_addr as usize, FR_OFF) & FR_BUSY) != 0 {}
-        // 3.Flush RX/TX fifos
-        mmio::clear_mmio_bits32(UART.base_addr as usize, LCR_OFF, LCR_FEN);
-    }
-
-    // 4. Set speed
-    uart_set_speed();
-    // 5. Configure the data frame format
-    unsafe {
-        // 5.1 Word length: bits 5 and 6
-        lcr_val |= ((UART.data_bits as u32 - 1) & 0x3) << 5;
-        // 5.2 Use 1 or 2 stop bits: bit LCR_STP2
-        if UART.stop_bits == 2 {
-            lcr_val |= LCR_STP2;
-        }
-        // 6 Enable FIFOs
-        lcr_val |= LCR_FEN;
-    }
-
-    unsafe {
-        mmio::write_mmio32(UART.base_addr as usize, LCR_OFF, lcr_val);
-        // 7. Enable RX interrupt
-        mmio::set_mmio_bits32(UART.base_addr as usize, IMSC_OFF, IMSC_RXIM);
-        // 8. Disable DMA
-        mmio::write_mmio32(UART.base_addr as usize, DMACR_OFF, 0x01);
-        // 9. Enable RX and UART
-        mmio::set_mmio_bits32(UART.base_addr as usize, CR_OFF, CR_UARTEN | CR_RXEN);
-    }
-}
-
-/// Calculates and sets the baud rate divisor registers
-fn uart_set_speed() {
-    let baud_div;
-
-    unsafe {
-        baud_div = 4 * UART.base_clock / UART.baudrate;
-        mmio::write_mmio32(UART.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
-        mmio::write_mmio32(UART.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
+        (*addr_of_mut!(UART)).configure();
     }
 }
 
@@ -199,14 +248,18 @@ fn uart_set_speed() {
 /// This function will block and spin until the UART's TX FIFO has space
 pub fn putchar(c: u8) {
     unsafe {
-        while (mmio::read_mmio32(UART.base_addr as usize, FR_OFF) & FR_TXFE) != 0 {}
-        mmio::write_mmio32(UART.base_addr as usize, DR_OFF, c as u32);
+        (*addr_of_mut!(UART)).putchar(c);
     }
 }
 
 /// Reads a single byte from the interrupt-driven RX buffer
 pub fn getchar() -> Option<u8> {
     return RX_BUFFER.lock_irqsafe(|rx| rx.pop());
+}
+
+/// Returns the UART base address
+pub fn get_base_addr() -> usize {
+    unsafe { (*addr_of_mut!(UART)).base_addr as usize }
 }
 
 /// Prints a byte slice to the UART
@@ -220,4 +273,74 @@ pub fn print(s: &[u8]) {
 pub fn println(s: &[u8]) {
     print(s);
     print(b"\n");
+}
+
+/// Sets up the PL011 UART from device tree properties
+///
+/// Parses the device's DTB properties to extract:
+/// - Base address from the `reg` property
+/// - Interrupt configuration from the `interrupts` property (configures as SPI in the GIC)
+/// - Clock frequency from the `clocks` property (follows phandle to clock node)
+///
+/// After extracting these values, initializes and configures the UART hardware.
+pub fn setup(dev: &device::PlatformDevice) {
+    let mut addr: u64 = 0;
+    let mut freq: u32 = 0;
+    let mut interrupt_info: [u32; gicv3::MAX_INTERRUPT_CELLS] = [0; gicv3::MAX_INTERRUPT_CELLS];
+    // Get #address-cells from parent (size_cells not needed for UART)
+    let (addr_cells, _) = dev.get_parent_cells();
+    // Parse reg property for base address
+    if let Some(reg_prop) = dev.find_property("reg") {
+        for i in 0..addr_cells as usize {
+            let cell = convert::read_be_u32(reg_prop.value, i * 4);
+            addr = (addr << 32) | cell as u64;
+        }
+    }
+
+    // Parse interrupts property
+    if let Some(int_prop) = dev.find_property("interrupts") {
+        if let Some(intc) = dtb::find_interrupt_parent(dev) {
+            // Get #interrupt-cells from interrupt controller
+            let mut interrupt_cells: u32 = 3; // Default for GICv3
+            if let Some(cells_prop) = intc.find_property("#interrupt-cells") {
+                interrupt_cells = convert::read_be_u32(cells_prop.value, 0);
+            }
+
+            // Read interrupt specifier cells
+            for i in 0..interrupt_cells.min(gicv3::MAX_INTERRUPT_CELLS as u32) {
+                interrupt_info[i as usize] = convert::read_be_u32(int_prop.value, (i * 4) as usize);
+            }
+
+            // interrupt_info[0] = irq_type (0 = SPI, 1 = PPI)
+            // interrupt_info[1] = interrupt_number
+            // interrupt_info[2] = flags (trigger type)
+            if interrupt_info[0] == 0 {
+                let spi_id = 32 + interrupt_info[1];
+                // bits 0-1: edge trigger (1=rising, 2=falling)
+                // bits 2-3: level trigger (4=high, 8=low)
+                if (interrupt_info[2] & 0x3) != 0 {
+                    gicv3::set_spi_trigger_edge(spi_id);
+                } else {
+                    gicv3::set_spi_trigger_level(spi_id);
+                }
+                gicv3::set_spi_priority(spi_id, 0x00);
+                gicv3::set_spi_group(spi_id);
+                gicv3::set_spi_routing(spi_id, 0); // Route to core 0
+                gicv3::enable_spi(spi_id);
+            }
+        }
+    }
+
+    // Parse clocks property for clock frequency
+    if let Some(clocks_prop) = dev.find_property("clocks") {
+        let phandle_id = convert::read_be_u32(clocks_prop.value, 0);
+        if let Some(clock_node) = dtb::find_device_by_phandle(phandle_id) {
+            if let Some(freq_prop) = clock_node.find_property("clock-frequency") {
+                freq = convert::read_be_u32(freq_prop.value, 0);
+            }
+        }
+    }
+
+    init_uart(addr as *mut u32, freq);
+    configure_uart();
 }

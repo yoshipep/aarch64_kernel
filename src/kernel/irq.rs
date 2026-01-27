@@ -1,7 +1,6 @@
 //! Exception handling module
 
-use core::arch::asm;
-
+use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
 use crate::utilities::mmio;
 use crate::utilities::print;
@@ -64,7 +63,7 @@ impl Regs {
     const NAMES: [&'static str; 34] = [
         "x0 ", "x1 ", "x2 ", "x3 ", "x4 ", "x5 ", "x6 ", "x7 ", "x8 ", "x9 ", "x10", "x11", "x12",
         "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25",
-        "x26", "x27", "x28", "x29", "x30", "esr", "elr", "spsr"
+        "x26", "x27", "x28", "x29", "x30", "esr", "elr", "spsr",
     ];
 
     /// Convert registers to an array for easy iteration
@@ -74,7 +73,7 @@ impl Regs {
             self.x9, self.x10, self.x11, self.x12, self.x13, self.x14, self.x15, self.x16,
             self.x17, self.x18, self.x19, self.x20, self.x21, self.x22, self.x23, self.x24,
             self.x25, self.x26, self.x27, self.x28, self.x29, self.x30, self.esr, self.elr,
-            self.spsr
+            self.spsr,
         ]
     }
 
@@ -206,23 +205,16 @@ pub fn do_irq(id: u32) -> u32 {
     match id {
         30 => {
             pl011::println(b"Timer interrupt!");
-            // Rearm the timer
-            unsafe {
-                asm!(
-                    "mrs x0, CNTFRQ_EL0",
-                    "msr CNTP_TVAL_EL0, x0",
-                    "isb",
-                    options(nostack, nomem)
-                );
-            }
+            arch_timer::rearm(arch_timer::get_frequency() as u32);
         }
         // UART RX interrupt
         33 => {
+            let base = pl011::get_base_addr();
             pl011::RX_BUFFER.lock_irqsafe(|rx| {
-                let ch = mmio::read_mmio32(0x9000000, 0) as u8;
+                let ch = mmio::read_mmio32(base, 0) as u8;
                 let _ = rx.push(ch);
             });
-            mmio::write_mmio32(0x9000000, pl011::ICR_OFF, pl011::ICR_RXIC);
+            mmio::write_mmio32(base, pl011::ICR_OFF, pl011::ICR_RXIC);
         }
         _ => {
             let mut buf = [0u8; 10];

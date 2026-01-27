@@ -103,6 +103,13 @@ struct UartPl011 {
     stop_bits: u8,
 }
 
+/// Early console base address (used before DTB-based driver initialization)
+///
+/// The bootloader/firmware is expected to have already configured the UART
+/// at this address. The early console just writes to it — no hardware setup.
+#[cfg(feature = "qemu-virt")]
+const EARLY_BASE: usize = 0x0900_0000;
+
 /* --- PL011 UART Register Constants --- */
 const DR_OFF: usize = 0x00;
 const FR_OFF: usize = 0x18;
@@ -198,9 +205,17 @@ impl UartPl011 {
     }
 
     /// Write a single byte
+    ///
+    /// If the UART has not been initialized yet (base address is null),
+    /// falls back to the early console base address.
     pub fn putchar(&self, c: u8) {
-        while (mmio::read_mmio32(self.base_addr as usize, FR_OFF) & FR_TXFE) != 0 {}
-        mmio::write_mmio32(self.base_addr as usize, DR_OFF, c as u32);
+        let base = if self.base_addr.is_null() {
+            EARLY_BASE
+        } else {
+            self.base_addr as usize
+        };
+        while (mmio::read_mmio32(base, FR_OFF) & FR_TXFE) != 0 {}
+        mmio::write_mmio32(base, DR_OFF, c as u32);
     }
 }
 

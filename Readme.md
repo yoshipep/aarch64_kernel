@@ -16,10 +16,11 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - Boots from the [bootloader](https://github.com/yoshipep/aarch64_bootloader)
 - **Device Tree Blob (DTB) parsing** — discovers hardware at boot by walking the flattened device tree. Devices register a `compatible` string and a setup function in a static match table, similar to Linux's `platform_driver` model
 - **GICv3 interrupt controller** — full driver for the Distributor (SPIs) and Redistributor (PPIs/SGIs), with support for priority, group, trigger mode (level/edge), and affinity routing
-- **PL011 UART driver** — polling TX, interrupt-driven RX with an IRQ-safe circular buffer. Base address and clock frequency discovered from the DTB
+- **PL011 UART driver** — polling TX, interrupt-driven RX with an IRQ-safe circular buffer. Base address and clock frequency discovered from the DTB. Includes an early console fallback (hardcoded base address) so `print!` works before DTB-based driver initialization
 - **ARM Generic Timer** — non-secure physical timer (EL1) with millisecond-granularity arming. Interrupt configured as a PPI through the GIC redistributor
 - **Exception handling** — full vector table with handlers for synchronous exceptions (SVC), IRQs, FIQs, and SErrors. Unimplemented exception classes are decoded and reported
 - **IRQ-safe mutex** — spinlock that masks interrupts while held, preventing deadlocks between main code and interrupt handlers
+- **Platform features** — compile-time platform selection via Cargo features (`qemu-virt` default). Platform-specific constants (e.g., early console address) are gated behind feature flags, preparing for future hardware targets like Raspberry Pi
 
 ---
 

@@ -13,5 +13,9 @@ opt-level = 3 # Highest optimization for performance (release builds)
 lto = true # Link-time optimization
 debug = false
 
+[features]
+default = ["qemu-virt"]
+qemu-virt = []
+
 [lib]
 crate-type = ["staticlib"] # Build this crate as a static library

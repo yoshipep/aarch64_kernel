@@ -262,17 +262,37 @@ pub fn get_base_addr() -> usize {
     unsafe { (*addr_of_mut!(UART)).base_addr as usize }
 }
 
-/// Prints a byte slice to the UART
-pub fn print(s: &[u8]) {
-    for &c in s {
-        putchar(c);
+/// Zero-sized writer that implements `core::fmt::Write` for the PL011 UART
+pub struct UartWriter;
+
+impl core::fmt::Write for UartWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &c in s.as_bytes() {
+            putchar(c);
+        }
+        Ok(())
     }
 }
 
-/// Prints a byte slice plus the newline character `\n` to the UART
-pub fn println(s: &[u8]) {
-    print(s);
-    print(b"\n");
+/// Helper function used by the `print!` and `println!` macros
+#[doc(hidden)]
+pub fn _print(args: core::fmt::Arguments) {
+    use core::fmt::Write;
+    UartWriter.write_fmt(args).unwrap();
+}
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::drivers::uart::pl011::_print(format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! println {
+    () => { $crate::print!("\n") };
+    ($fmt:expr) => { $crate::print!(concat!($fmt, "\n")) };
+    ($fmt:expr, $($arg:tt)*) => { $crate::print!(concat!($fmt, "\n"), $($arg)*) };
 }
 
 /// Sets up the PL011 UART from device tree properties

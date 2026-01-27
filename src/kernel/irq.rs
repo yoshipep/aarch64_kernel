@@ -3,7 +3,7 @@
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
 use crate::utilities::mmio;
-use crate::utilities::print;
+use crate::{print, println};
 
 /// CPU register state at the time of an exception
 ///
@@ -87,12 +87,9 @@ impl Regs {
 
     /// Print all registers to UART
     pub fn print(&self) {
-        pl011::println(b"\nRegisters:");
+        println!("\nRegisters:");
         for (name, value) in self.iter() {
-            pl011::print(name.as_bytes());
-            pl011::print(b": 0x");
-            print::print_hex_u64(value);
-            pl011::print(b"\n");
+            println!("{}: 0x{:016x}", name, value);
         }
     }
 }
@@ -103,31 +100,25 @@ impl Regs {
 /// Exception Link Register (ELR), which points to the instruction that
 /// caused the exception.
 fn print_faulting_instr(elr: u64) {
-    let opcode: u32;
     let addr = (elr & !3) as *const u32;
-
-    pl011::print(b"Faulting instruction at 0x");
-    print::print_hex_u64(elr);
-    pl011::print(b": ");
+    let opcode: u32;
     unsafe {
         opcode = addr.read_volatile();
     }
 
-    for i in 0..4 {
+    print!("Faulting instruction at 0x{:016x}: ", elr);
+    for i in 0..4u32 {
+        let byte = (opcode >> (i * 8)) as u8;
         if i == 0 {
-            pl011::print(b"[");
-            print::print_hex_u8((opcode >> (i * 8)) as u8);
-            pl011::print(b"]")
+            print!("[{:02X}]", byte);
         } else {
-            print::print_hex_u8((opcode >> (i * 8)) as u8);
+            print!("{:02X}", byte);
         }
-
         if i < 3 {
-            pl011::print(b" ");
+            print!(" ");
         }
     }
-
-    pl011::print(b"\n");
+    println!();
 }
 
 /// Prints all CPU registers from the saved register state
@@ -144,7 +135,7 @@ fn print_regs(regs: &Regs) {
 /// It prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_sync(regs: &Regs) -> ! {
-    pl011::println(b"Bad mode in Synchronous Exception handler");
+    println!("Bad mode in Synchronous Exception handler");
     print_faulting_instr(regs.elr);
     print_regs(regs);
     panic!();
@@ -157,7 +148,7 @@ pub extern "C" fn do_bad_sync(regs: &Regs) -> ! {
 /// information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_irq(regs: &Regs) -> ! {
-    pl011::println(b"Bad mode in IRQ handler");
+    println!("Bad mode in IRQ handler");
     print_faulting_instr(regs.elr);
     print_regs(regs);
     panic!();
@@ -170,7 +161,7 @@ pub extern "C" fn do_bad_irq(regs: &Regs) -> ! {
 /// diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_fiq(regs: &Regs) -> ! {
-    pl011::println(b"Bad mode in FIQ handler");
+    println!("Bad mode in FIQ handler");
     print_faulting_instr(regs.elr);
     print_regs(regs);
     panic!();
@@ -183,7 +174,7 @@ pub extern "C" fn do_bad_fiq(regs: &Regs) -> ! {
 /// diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_serror(regs: &Regs) -> ! {
-    pl011::println(b"Bad mode in SError handler");
+    println!("Bad mode in SError handler");
     print_faulting_instr(regs.elr);
     print_regs(regs);
     panic!();
@@ -192,10 +183,7 @@ pub extern "C" fn do_bad_serror(regs: &Regs) -> ! {
 /// Synchronous exception handler
 #[unsafe(no_mangle)]
 pub extern "C" fn do_sync(nr: u32) -> u64 {
-    let mut buf = [0u8; 10];
-    let nr_str = print::u32_to_str(nr, &mut buf);
-    pl011::print(b"Requested syscall: ");
-    pl011::println(nr_str);
+    println!("Requested syscall: {}", nr);
     return 0;
 }
 
@@ -204,7 +192,7 @@ pub extern "C" fn do_sync(nr: u32) -> u64 {
 pub fn do_irq(id: u32) -> u32 {
     match id {
         30 => {
-            pl011::println(b"Timer interrupt!");
+            println!("Timer interrupt!");
             arch_timer::rearm(arch_timer::get_frequency() as u32);
         }
         // UART RX interrupt
@@ -217,10 +205,7 @@ pub fn do_irq(id: u32) -> u32 {
             mmio::write_mmio32(base, pl011::ICR_OFF, pl011::ICR_RXIC);
         }
         _ => {
-            let mut buf = [0u8; 10];
-            let id_str = print::u32_to_str(id, &mut buf);
-            pl011::print(b"Unhandled IRQ: ");
-            pl011::println(id_str);
+            println!("Unhandled IRQ: {}", id);
         }
     }
     return id; // return the interrupt ID so we can acknowledge it by writting to ICC_EOIR1_EL1
@@ -276,8 +261,7 @@ pub extern "C" fn unimplemented_sync(exception_class: u32) {
         61 => kind = "Profiling exception",
         _ => kind = "Unknown reason",
     }
-    pl011::print(b"Unimplemented synchronous exception: ");
-    pl011::println(kind.as_bytes());
+    println!("Unimplemented synchronous exception: {}", kind);
 }
 
 /// Handles FIQ (Fast Interrupt Request) from the current exception level
@@ -286,7 +270,7 @@ pub extern "C" fn unimplemented_sync(exception_class: u32) {
 /// information and panics (as FIQ handling is not yet implemented).
 #[unsafe(no_mangle)]
 pub extern "C" fn do_fiq(regs: &Regs) -> ! {
-    pl011::println(b"FIQ handler");
+    println!("FIQ handler");
     print_faulting_instr(regs.elr);
     print_regs(regs);
     panic!();
@@ -298,7 +282,7 @@ pub extern "C" fn do_fiq(regs: &Regs) -> ! {
 /// Prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_serror(regs: &Regs) -> ! {
-    pl011::println(b"SError handler");
+    println!("SError handler");
     print_faulting_instr(regs.elr);
     print_regs(regs);
     panic!();

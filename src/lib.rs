@@ -26,14 +26,12 @@ pub mod utilities;
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain(dtb_addr: usize) {
     dtb::parse_dtb(dtb_addr);
-    pl011::println(b"Hello, from Rust");
-    pl011::println(b"Arming the timer (1000ms)");
+    println!("Hello, from Rust");
+    println!("Arming the timer (1000ms)");
     arch_timer::arm_ms(1000);
     loop {
         if let Some(ch) = pl011::getchar() {
-            pl011::print(b"You typed: ");
-            pl011::putchar(ch);
-            pl011::print(b"\n");
+            println!("You typed: {}", ch as char);
         }
     }
 }
@@ -43,7 +41,11 @@ pub extern "C" fn kmain(dtb_addr: usize) {
 /// This function is called when the kernel panics. Since we're in a bare-metal environment
 /// with no standard library, we must define our own panic behavior.
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    pl011::println(b"Panic!");
+fn panic(info: &PanicInfo) -> ! {
+    if let Some(location) = info.location() {
+        println!("Panic at {}:{}", location.file(), location.line());
+    } else {
+        println!("Panic!");
+    }
     loop {}
 }

@@ -3,4 +3,4 @@
 pub mod pl011;
 
 // Re-export commonly used functions for convenience
-pub use pl011::{getchar, print, println, putchar};
+pub use pl011::{getchar, putchar};

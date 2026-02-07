@@ -27,7 +27,7 @@ const CTL_ISTATUS: u64 = 1 << 2;  // Interrupt status (read-only)
 pub fn get_frequency() -> u64 {
     let freq: u64;
     unsafe {
-        asm!("mrs {}, CNTFRQ_EL0", out(reg) freq, options(nostack, nomem));
+        asm!("mrs {}, CNTFRQ_EL0", out(reg) freq, options(nostack, nomem, preserves_flags));
     }
     freq
 }
@@ -36,7 +36,7 @@ pub fn get_frequency() -> u64 {
 pub fn get_counter() -> u64 {
     let cnt: u64;
     unsafe {
-        asm!("mrs {}, CNTPCT_EL0", out(reg) cnt, options(nostack, nomem));
+        asm!("mrs {}, CNTPCT_EL0", out(reg) cnt, options(nostack, nomem, preserves_flags));
     }
     cnt
 }
@@ -46,7 +46,7 @@ pub fn get_counter() -> u64 {
 /// The timer will fire when the counter increments by `tval` ticks.
 pub fn set_timer_value(tval: u32) {
     unsafe {
-        asm!("msr CNTP_TVAL_EL0, {}", in(reg) tval as u64, options(nostack, nomem));
+        asm!("msr CNTP_TVAL_EL0, {}", in(reg) tval as u64, options(nostack, nomem, preserves_flags));
     }
 }
 
@@ -54,7 +54,7 @@ pub fn set_timer_value(tval: u32) {
 pub fn get_timer_value() -> u32 {
     let tval: u64;
     unsafe {
-        asm!("mrs {}, CNTP_TVAL_EL0", out(reg) tval, options(nostack, nomem));
+        asm!("mrs {}, CNTP_TVAL_EL0", out(reg) tval, options(nostack, nomem, preserves_flags));
     }
     tval as u32
 }
@@ -64,7 +64,7 @@ pub fn get_timer_value() -> u32 {
 /// The timer will fire when the counter reaches `cval`.
 pub fn set_compare_value(cval: u64) {
     unsafe {
-        asm!("msr CNTP_CVAL_EL0, {}", in(reg) cval, options(nostack, nomem));
+        asm!("msr CNTP_CVAL_EL0, {}", in(reg) cval, options(nostack, nomem, preserves_flags));
     }
 }
 
@@ -72,7 +72,7 @@ pub fn set_compare_value(cval: u64) {
 pub fn get_compare_value() -> u64 {
     let cval: u64;
     unsafe {
-        asm!("mrs {}, CNTP_CVAL_EL0", out(reg) cval, options(nostack, nomem));
+        asm!("mrs {}, CNTP_CVAL_EL0", out(reg) cval, options(nostack, nomem, preserves_flags));
     }
     cval
 }
@@ -81,7 +81,7 @@ pub fn get_compare_value() -> u64 {
 fn get_ctl() -> u64 {
     let ctl: u64;
     unsafe {
-        asm!("mrs {}, CNTP_CTL_EL0", out(reg) ctl, options(nostack, nomem));
+        asm!("mrs {}, CNTP_CTL_EL0", out(reg) ctl, options(nostack, nomem, preserves_flags));
     }
     ctl
 }
@@ -89,8 +89,8 @@ fn get_ctl() -> u64 {
 /// Writes the control register
 fn set_ctl(ctl: u64) {
     unsafe {
-        asm!("msr CNTP_CTL_EL0, {}", in(reg) ctl, options(nostack, nomem));
-        asm!("isb", options(nostack, nomem));
+        asm!("msr CNTP_CTL_EL0, {}", in(reg) ctl, options(nostack, nomem, preserves_flags));
+        asm!("isb", options(nostack, nomem, preserves_flags));
     }
 }
 

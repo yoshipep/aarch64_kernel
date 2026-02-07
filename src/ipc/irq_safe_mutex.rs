@@ -14,8 +14,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 fn disable_irq() -> u64 {
     let daif: u64;
     unsafe {
-        asm!("mrs {}, daif", out(reg) daif);
-        asm!("msr daifset, #0x2");
+        asm!("mrs {}, daif", out(reg) daif, options(nostack, nomem, preserves_flags));
+        asm!("msr daifset, #0x2", options(nostack, nomem, preserves_flags));
     }
     daif
 }
@@ -26,7 +26,7 @@ fn disable_irq() -> u64 {
 #[inline(always)]
 fn restore_interrupts(daif: u64) {
     unsafe {
-        asm!("msr daif, {}", in(reg) daif);
+        asm!("msr daif, {}", in(reg) daif, options(nostack, nomem, preserves_flags));
     }
 }
 

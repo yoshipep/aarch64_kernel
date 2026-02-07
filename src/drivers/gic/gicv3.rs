@@ -89,14 +89,14 @@ impl Gicv3 {
                 GICD_CTLR,
                 GICD_CTLR_GRP1S | GICD_CTLR_GRP1NS,
             );
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
     /// Initializes the GIC Redistributor
     pub fn init_gic_redistributor(&self) {
         unsafe {
             mmio::clear_mmio_bits32(self.redist_addr, GICR_WAKER, GICR_WAKER_PSLEEP);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
             while (mmio::read_mmio32(self.redist_addr, GICR_WAKER) & GICR_WAKER_CASLEEP) != 0 {}
         }
     }
@@ -117,7 +117,7 @@ impl Gicv3 {
             reg_val &= mask;
             reg_val |= (prio as u32) << bit_shift;
             mmio::write_mmio32(prio_reg_addr, 0, reg_val);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -127,7 +127,7 @@ impl Gicv3 {
     pub fn set_ppi_group(&self, id: u32) {
         unsafe {
             mmio::set_mmio_bits32(self.redist_addr + GICR_SGI_BASE, GICR_IGROUPR0, 1 << id);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -137,7 +137,7 @@ impl Gicv3 {
     pub fn enable_ppi(&self, id: u32) {
         unsafe {
             mmio::set_mmio_bits32(self.redist_addr + GICR_SGI_BASE, GICR_ISENABLER0, 1 << id);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -156,7 +156,7 @@ impl Gicv3 {
             reg_val &= mask;
             reg_val |= (prio as u32) << bit_shift;
             mmio::write_mmio32(prio_reg_addr, 0, reg_val);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -174,7 +174,7 @@ impl Gicv3 {
             reg_val &= mask;
             // Level-sensitive: bits = 0b00
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -193,7 +193,7 @@ impl Gicv3 {
             // Edge-triggered: bits = 0b10
             reg_val |= 0b10 << bit_shift;
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -207,7 +207,7 @@ impl Gicv3 {
             let enabler_reg_addr = self.dist_addr + GICD_ISENABLER + reg_offset;
             let bit_to_set = 1 << (id % 32);
             mmio::write_mmio32(enabler_reg_addr, 0, bit_to_set);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -220,7 +220,7 @@ impl Gicv3 {
             let router_reg_addr = self.dist_addr + GICD_IROUTER + (8 * id as usize);
             let router_ptr = router_reg_addr as *mut u64;
             core::ptr::write_volatile(router_ptr, core_affinity);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -234,7 +234,7 @@ impl Gicv3 {
             let group_reg_addr = self.dist_addr + GICD_IGROUPR + reg_offset;
             let bit_to_set = 1 << (id % 32);
             mmio::set_mmio_bits32(group_reg_addr, 0, bit_to_set);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -253,7 +253,7 @@ impl Gicv3 {
             reg_val &= mask;
             // Level-sensitive: bits = 0b00
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 
@@ -273,7 +273,7 @@ impl Gicv3 {
             // Edge-triggered: bits = 0b10
             reg_val |= 0b10 << bit_shift;
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
-            asm!("dsb sy", options(nostack, nomem));
+            asm!("dsb sy", options(nostack));
         }
     }
 }
@@ -377,7 +377,7 @@ pub fn set_ppi_trigger_edge(id: u32) {
 /// Sets the interrupt mask `priority`. Interrupts with a higher priority than `priority` will be signaled to the PE
 pub fn set_priority_mask(priority: u8) {
     unsafe {
-        asm!("msr ICC_PMR_EL1, {}", in(reg) priority as u64, options(nostack, nomem));
+        asm!("msr ICC_PMR_EL1, {}", in(reg) priority as u64, options(nostack, nomem, preserves_flags));
     }
 }
 
@@ -390,7 +390,7 @@ pub fn enable_grp1_ints() {
             "msr ICC_IGRPEN1_EL1, {tmp}",
             "isb sy",
             tmp = out(reg) _,
-            options(nostack, nomem)
+            options(nostack, nomem, preserves_flags)
         );
     }
 }

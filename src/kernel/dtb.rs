@@ -147,7 +147,7 @@ pub fn parse_dtb(dtb: usize) {
     let structure_block = dtb + header.off_dt_struct as usize;
     let mut off = 0;
     let mut prop_id = 0;
-    let mut device = device::PlatformDevice::default();
+    let mut device;
     let mut stack: [usize; 10] = [0; 10];
     let mut stack_depth = 0;
     loop {

@@ -375,6 +375,7 @@ pub fn set_ppi_trigger_edge(id: u32) {
 /// Sets an interrupt mask
 ///
 /// Sets the interrupt mask `priority`. Interrupts with a higher priority than `priority` will be signaled to the PE
+#[inline(always)]
 pub fn set_priority_mask(priority: u8) {
     unsafe {
         asm!("msr ICC_PMR_EL1, {}", in(reg) priority as u64, options(nostack, nomem, preserves_flags));
@@ -382,6 +383,7 @@ pub fn set_priority_mask(priority: u8) {
 }
 
 /// Enable the Group 1 interrupts
+#[inline(always)]
 pub fn enable_grp1_ints() {
     unsafe {
         asm!(

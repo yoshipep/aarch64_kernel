@@ -19,11 +19,12 @@ use crate::kernel::dtb;
 use crate::utilities::convert;
 
 /// CNTP_CTL_EL0 bits
-const CTL_ENABLE: u64 = 1 << 0;   // Timer enabled
-const CTL_IMASK: u64 = 1 << 1;    // Interrupt masked
-const CTL_ISTATUS: u64 = 1 << 2;  // Interrupt status (read-only)
+const CTL_ENABLE: u64 = 1 << 0; // Timer enabled
+const CTL_IMASK: u64 = 1 << 1; // Interrupt masked
+const CTL_ISTATUS: u64 = 1 << 2; // Interrupt status (read-only)
 
 /// Returns the timer frequency in Hz
+#[inline(always)]
 pub fn get_frequency() -> u64 {
     let freq: u64;
     unsafe {
@@ -33,6 +34,7 @@ pub fn get_frequency() -> u64 {
 }
 
 /// Returns the current counter value
+#[inline(always)]
 pub fn get_counter() -> u64 {
     let cnt: u64;
     unsafe {
@@ -44,6 +46,7 @@ pub fn get_counter() -> u64 {
 /// Sets the timer value (countdown)
 ///
 /// The timer will fire when the counter increments by `tval` ticks.
+#[inline(always)]
 pub fn set_timer_value(tval: u32) {
     unsafe {
         asm!("msr CNTP_TVAL_EL0, {}", in(reg) tval as u64, options(nostack, nomem, preserves_flags));
@@ -51,6 +54,7 @@ pub fn set_timer_value(tval: u32) {
 }
 
 /// Gets the current timer value (remaining ticks)
+#[inline(always)]
 pub fn get_timer_value() -> u32 {
     let tval: u64;
     unsafe {
@@ -62,6 +66,7 @@ pub fn get_timer_value() -> u32 {
 /// Sets the compare value (absolute)
 ///
 /// The timer will fire when the counter reaches `cval`.
+#[inline(always)]
 pub fn set_compare_value(cval: u64) {
     unsafe {
         asm!("msr CNTP_CVAL_EL0, {}", in(reg) cval, options(nostack, nomem, preserves_flags));
@@ -69,6 +74,7 @@ pub fn set_compare_value(cval: u64) {
 }
 
 /// Gets the compare value
+#[inline(always)]
 pub fn get_compare_value() -> u64 {
     let cval: u64;
     unsafe {
@@ -78,6 +84,7 @@ pub fn get_compare_value() -> u64 {
 }
 
 /// Reads the control register
+#[inline(always)]
 fn get_ctl() -> u64 {
     let ctl: u64;
     unsafe {
@@ -87,6 +94,7 @@ fn get_ctl() -> u64 {
 }
 
 /// Writes the control register
+#[inline(always)]
 fn set_ctl(ctl: u64) {
     unsafe {
         asm!("msr CNTP_CTL_EL0, {}", in(reg) ctl, options(nostack, nomem, preserves_flags));
@@ -95,26 +103,31 @@ fn set_ctl(ctl: u64) {
 }
 
 /// Enables the timer
+#[inline(always)]
 pub fn enable() {
     set_ctl(get_ctl() | CTL_ENABLE);
 }
 
 /// Disables the timer
+#[inline(always)]
 pub fn disable() {
     set_ctl(get_ctl() & !CTL_ENABLE);
 }
 
 /// Masks the timer interrupt (prevents interrupt from firing)
+#[inline(always)]
 pub fn mask_interrupt() {
     set_ctl(get_ctl() | CTL_IMASK);
 }
 
 /// Unmasks the timer interrupt (allows interrupt to fire)
+#[inline(always)]
 pub fn unmask_interrupt() {
     set_ctl(get_ctl() & !CTL_IMASK);
 }
 
 /// Returns true if the timer condition is met (timer fired)
+#[inline(always)]
 pub fn is_pending() -> bool {
     (get_ctl() & CTL_ISTATUS) != 0
 }

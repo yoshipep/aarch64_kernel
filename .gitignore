@@ -11,3 +11,4 @@ virt.dtb
 *.elf
 *.bin
 *.tmp
+Session.vim

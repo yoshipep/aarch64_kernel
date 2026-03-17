@@ -21,6 +21,7 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - **Exception handling** — full vector table with handlers for synchronous exceptions (SVC), IRQs, FIQs, and SErrors. Unimplemented exception classes are decoded and reported
 - **IRQ-safe mutex** — spinlock that masks interrupts while held, preventing deadlocks between main code and interrupt handlers
 - **Platform features** — compile-time platform selection via Cargo features (`qemu-virt` default). Platform-specific constants (e.g., early console address) are gated behind feature flags, preparing for future hardware targets like Raspberry Pi
+- **Identity mapping and MMU** — sets up MAIR_EL1 (device nGnRnE, normal write-back, normal non-cacheable), builds a two-level page table (L0 table → L1 1 GiB block descriptors) for identity mapping, configures TCR_EL1 (48-bit VA, 40-bit PA, 4K granule, inner-shareable cacheable), and enables the MMU via SCTLR_EL1
 
 ---
 

@@ -1,4 +1,5 @@
 #include "constants.h"
+#include "asm/memory.h"
 
 OUTPUT_FORMAT("elf64-littleaarch64")
 
@@ -23,11 +24,11 @@ SECTIONS {
     } > RAM
 
     __data_start = .;
-    .rodata : ALIGN(4K)
+    .rodata : ALIGN(PAGE_SIZE)
     {
         __rodata_start = .;
         *(.rodata.*)
-        __rodata_end = .;
+    __rodata_end = .;
     } > RAM
 
     .data : ALIGN(4K)
@@ -35,11 +36,15 @@ SECTIONS {
         *(.data .data.*)
     } > RAM
 
-    .bss : ALIGN(4K)
+    .bss : ALIGN(PAGE_SIZE)
     {
         _bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
+        . = ALIGN(PAGE_SIZE);
+        __idmap_l0 = .;
+        . += PAGE_SIZE;
+        __idmap_l1 = .;
         _bss_end = .;
     } > RAM
 
@@ -47,6 +52,6 @@ SECTIONS {
 
     __kernel_end = .;
     . = . + STACK_SIZE;
-    . = ALIGN(4K);
-    stack_top = .;
+    . = ALIGN(PAGE_SIZE);
+    __stack_top = .;
 }

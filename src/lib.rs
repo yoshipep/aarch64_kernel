@@ -7,7 +7,7 @@
 
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
-use crate::kernel::dtb;
+use crate::kernel::{dtb, mm};
 use core::panic::PanicInfo;
 
 // Public modules
@@ -26,6 +26,8 @@ pub mod utilities;
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain(dtb_addr: usize) {
     dtb::parse_dtb(dtb_addr);
+    mm::setup_mair_ranges();
+    mm::setup_identity_mapping();
     println!("Hello, from Rust");
     println!("Arming the timer (1000ms)");
     arch_timer::arm_ms(1000);

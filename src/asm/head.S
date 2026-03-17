@@ -16,7 +16,7 @@ ENTRY(_start)
     msr CPACR_EL1, x0
     isb sy
     /* Set up stack */
-    ldr x30, =stack_top
+    ldr x30, =__stack_top
     mov sp, x30
     /* 1. Load the interrupt vector address into VBAR_EL1 */
     adr x0, evt

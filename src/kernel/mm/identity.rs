@@ -12,7 +12,7 @@ use super::pgtable::{
 unsafe extern "C" {
     static __kernel_start: u8;
     static __stack_top: u8;
-static mut __idmap_l0: u8;
+    static mut __idmap_l0: u8;
     static mut __idmap_l1: u8;
 }
 
@@ -77,18 +77,18 @@ pub fn setup_identity_mapping() {
 fn configure_tcr() {
     unsafe {
         asm!(
-            "mov x0, #0x10",
+            "mov x0, #0x10", // T0SZ[5:0]=16: VA size = 2^(64-16) = 2^48 (48-bit VA, TTBR0)
             "mov x1, #0x1",
-            "orr x0, x0, x1, LSL #8",
-            "orr x0, x0, x1, LSL #10",
-            "mov x1, #0x3",
-            "orr x0, x0, x1, LSL #12",
-            "mov x1, #0x10",
-            "orr x0, x0, x1, LSL #16",
-            "mov x1, #0x1",
-            "orr x0, x0, x1, LSL #23",
-            "orr x0, x0, x1, LSL #31",
-            "orr x0, x0, x1, LSL #33",
+            "mov x2, #0x3",
+            "mov x3, #0x10",
+            "orr x0, x0, x1, LSL #8", // IRGN0[9:8]=0b01: inner cache = normal WB, read/write allocate
+            "orr x0, x0, x1, LSL #10", // ORGN0[11:10]=0b01: outer cache = normal WB, read/write allocate
+            "orr x0, x0, x2, LSL #12", // SH0[13:12]=0b11: inner shareable (coherent across all CPUs)
+            // TG0[15:14]=0b00 (default): 4KB granule for TTBR0
+            "orr x0, x0, x3, LSL #16", // T1SZ[21:16]=16: 48-bit VA for TTBR1 (disabled by EPD1)
+            "orr x0, x0, x1, LSL #23", // EPD1[23]=1: disable TTBR1 walks (no high kernel mapping yet)
+            "orr x0, x0, x1, LSL #31", // TG1[31:30]=0b10 (bit31=1, bit30=0): 4KB granule for TTBR1
+            "orr x0, x0, x1, LSL #34", // IPS[34:32]=0b100 (bit34=1): 44-bit PA space (16TB)
             "msr tcr_el1, x0",
             "isb sy",
             options(nostack, nomem, preserves_flags)

@@ -12,6 +12,7 @@ use core::arch::asm;
 use core::ptr::addr_of_mut;
 
 use crate::kernel::device;
+use crate::kernel::sysreg::icc;
 use crate::utilities::convert;
 use crate::utilities::mmio;
 
@@ -21,42 +22,89 @@ use crate::utilities::mmio;
 /// (see `Documentation/devicetree/bindings/interrupt-controller/arm,gic-v3.yaml`).
 pub const MAX_INTERRUPT_CELLS: usize = 4;
 
-/* --- GICD (Distributor) Constants --- */
-/// Distributor Control Register
-const GICD_CTLR: usize = 0x000;
-/// Enable non secure Group 1 interrupts bit
-const GICD_CTLR_GRP1NS: u32 = 0b10;
-/// Enable secure Group 1 interrupts bit
-const GICD_CTLR_GRP1S: u32 = 0b100;
-/// Interrupt Set-Enable Register
-const GICD_ISENABLER: usize = 0x100;
-/// Interrupt Priority Registers
-const GICD_IPRIORITYR: usize = 0x400;
-/// Interrupt Configuration Registers
-const GICD_ICFGR: usize = 0xC00;
-/// Interrupt Routing Registers
-const GICD_IROUTER: usize = 0x6100;
-/// Interrupt Group Registers
-const GICD_IGROUPR: usize = 0x080;
+/// Priority mask that lets every interrupt through (0xFF is the lowest threshold)
+const PRIORITY_MASK_ALL: u8 = 0xFF;
 
-/* --- GICR (Redistributor) Constants --- */
-/// SGI Frame offset
-const GICR_SGI_BASE: usize = 0x10000; // Offset from RD_base to SGI & PPI frame
-/// Redistributor Wake Register
-const GICR_WAKER: usize = 0x0014;
-/// Processor sleep bit. Indicates whether the Redistributor can assert the **WakeRequest**
-/// signal
-const GICR_WAKER_PSLEEP: u32 = 0b10;
-/// Children asleep bit. Indicates whether the connected PE is quiescent
-const GICR_WAKER_CASLEEP: u32 = 0b100;
-/// Interrupt Priority Registers
-const GICR_IPRIORITYR: usize = 0x400;
-/// Interrupt Group Register 0
-const GICR_IGROUPR0: usize = 0x080;
-/// Interrupt Set-Enable Register 0
-const GICR_ISENABLER0: usize = 0x100;
-/// Interrupt Configuration Register
-const GICR_ICFGR: usize = 0xC00;
+/* --- GICD (Distributor) register offsets --- */
+#[allow(dead_code)]
+mod gicd {
+    pub const CTLR: usize = 0x000; // Distributor Control
+    pub const IGROUPR: usize = 0x080; // Interrupt Group
+    pub const ISENABLER: usize = 0x100; // Interrupt Set-Enable
+    pub const IPRIORITYR: usize = 0x400; // Interrupt Priority
+    pub const ICFGR: usize = 0xC00; // Interrupt Configuration
+    pub const IROUTER: usize = 0x6100; // Interrupt Routing
+}
+
+/* --- GICR (Redistributor) register offsets --- */
+#[allow(dead_code)]
+mod gicr {
+    pub const SGI_BASE: usize = 0x10000; // Offset from RD_base to the SGI/PPI frame
+    pub const WAKER: usize = 0x0014; // Redistributor Wake (in the RD frame)
+    /* The following live inside the SGI/PPI frame (RD_base + SGI_BASE) */
+    pub const IGROUPR0: usize = 0x080; // Interrupt Group 0
+    pub const ISENABLER0: usize = 0x100; // Interrupt Set-Enable 0
+    pub const IPRIORITYR: usize = 0x400; // Interrupt Priority
+    pub const ICFGR: usize = 0xC00; // Interrupt Configuration
+}
+
+/* --- GICD_CTLR bits ---
+ * The layout depends on how many Security states the Distributor supports (Arm IHI 0069H.b 12.9.4).
+ * QEMU virt runs without EL3 (no `secure=on`), so there is a single Security state and every access
+ * -- including ours from Non-secure EL1 -- sees the single-Security-state view:
+ *     [0] EnableGrp0   [1] EnableGrp1   [4] ARE   [6] DS   [7] E1NWF   [31] RWP
+ * The two-Security-state views differ, so these constants are not portable to a system with EL3:
+ *     Secure:     [1] EnableGrp1NS  [2] EnableGrp1S  [4] ARE_S  [5] ARE_NS
+ *     Non-secure: [0] EnableGrp1    [1] EnableGrp1A  [4] ARE_NS
+ */
+#[allow(dead_code)]
+mod gicd_ctlr {
+    pub const ENABLE_GRP0: u32 = 1 << 0; // Enable Group 0 interrupts
+    pub const ENABLE_GRP1: u32 = 1 << 1; // Enable Group 1 interrupts
+    // Affinity Routing Enable. Do NOT write it: RAO/WI when GICv2 backwards compatibility is
+    // absent (so already in effect here), and changing it 0 -> 1 once a group is enabled is
+    // UNPREDICTABLE.
+    pub const ARE: u32 = 1 << 4;
+}
+
+/* --- GICR_WAKER bits --- */
+#[allow(dead_code)]
+mod gicr_waker {
+    pub const PSLEEP: u32 = 1 << 1; // Processor sleep: may assert WakeRequest
+    pub const CASLEEP: u32 = 1 << 2; // Children asleep: the connected PE is quiescent
+}
+
+/// Interrupt trigger mode — the 2-bit ICFGR field for one interrupt
+#[derive(Clone, Copy)]
+#[repr(u32)]
+enum Trigger {
+    Level = 0b00,
+    Edge = 0b10,
+}
+
+/* --- GIC register-array layout ---
+ * Several GIC registers are arrays in which each interrupt owns a fixed-width field, so an
+ * interrupt id maps to a (register index, bit shift) pair.
+ */
+mod layout {
+    pub const REG_BYTES: usize = 4; // these register arrays are 32-bit
+
+    // IPRIORITYR: an 8-bit priority per interrupt -> 4 interrupts per register
+    pub const PRIORITY_PER_REG: u32 = 4;
+    pub const PRIORITY_BITS: u32 = 8;
+    pub const PRIORITY_MASK: u32 = 0xFF;
+
+    // ICFGR: a 2-bit config field per interrupt -> 16 interrupts per register
+    pub const CONFIG_PER_REG: u32 = 16;
+    pub const CONFIG_BITS: u32 = 2;
+    pub const CONFIG_MASK: u32 = 0b11;
+
+    // ISENABLER / IGROUPR: a single bit per interrupt -> 32 interrupts per register
+    pub const ENABLE_PER_REG: u32 = 32;
+
+    // IROUTER: one 64-bit register per interrupt
+    pub const ROUTER_STRIDE: usize = 8;
+}
 
 /// Global GICv3 instance holding the distributor and redistributor base addresses
 static mut GIC: Gicv3 = Gicv3::new();
@@ -84,20 +132,17 @@ impl Gicv3 {
     /// Initializes the GIC Distributor
     pub fn init_gic_distributor(&self) {
         unsafe {
-            mmio::set_mmio_bits32(
-                self.dist_addr,
-                GICD_CTLR,
-                GICD_CTLR_GRP1S | GICD_CTLR_GRP1NS,
-            );
+            mmio::set_mmio_bits32(self.dist_addr, gicd::CTLR, gicd_ctlr::ENABLE_GRP1);
             asm!("dsb sy", options(nostack));
         }
     }
+
     /// Initializes the GIC Redistributor
     pub fn init_gic_redistributor(&self) {
         unsafe {
-            mmio::clear_mmio_bits32(self.redist_addr, GICR_WAKER, GICR_WAKER_PSLEEP);
+            mmio::clear_mmio_bits32(self.redist_addr, gicr::WAKER, gicr_waker::PSLEEP);
             asm!("dsb sy", options(nostack));
-            while (mmio::read_mmio32(self.redist_addr, GICR_WAKER) & GICR_WAKER_CASLEEP) != 0 {}
+            while (mmio::read_mmio32(self.redist_addr, gicr::WAKER) & gicr_waker::CASLEEP) != 0 {}
         }
     }
 
@@ -106,16 +151,16 @@ impl Gicv3 {
     /// Sets the priority `prio` to the given PPI/SGI `id`
     pub fn set_ppi_priority(&self, id: u32, prio: u8) {
         unsafe {
-            let sgi_base = self.redist_addr + GICR_SGI_BASE;
-            let reg_index = id / 4;
-            let reg_offset = (reg_index * 4) as usize;
-            let byte_index_in_reg = id % 4;
-            let bit_shift = byte_index_in_reg * 8;
-            let prio_reg_addr = sgi_base + GICR_IPRIORITYR + reg_offset;
+            let sgi_base = self.redist_addr + gicr::SGI_BASE;
+            let reg_index = id / layout::PRIORITY_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let prio_reg_addr = sgi_base + gicr::IPRIORITYR + reg_offset;
+            let bit_shift = (id % layout::PRIORITY_PER_REG) * layout::PRIORITY_BITS;
+
             let mut reg_val = mmio::read_mmio32(prio_reg_addr, 0);
-            let mask: u32 = !(0xFF << bit_shift);
-            reg_val &= mask;
+            reg_val &= !(layout::PRIORITY_MASK << bit_shift);
             reg_val |= (prio as u32) << bit_shift;
+
             mmio::write_mmio32(prio_reg_addr, 0, reg_val);
             asm!("dsb sy", options(nostack));
         }
@@ -126,7 +171,7 @@ impl Gicv3 {
     /// Assigns the PPI/SGI `id` to Group 1
     pub fn set_ppi_group(&self, id: u32) {
         unsafe {
-            mmio::set_mmio_bits32(self.redist_addr + GICR_SGI_BASE, GICR_IGROUPR0, 1 << id);
+            mmio::set_mmio_bits32(self.redist_addr + gicr::SGI_BASE, gicr::IGROUPR0, 1 << id);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -136,7 +181,7 @@ impl Gicv3 {
     /// Enables the PPI/SGI with the given `id`
     pub fn enable_ppi(&self, id: u32) {
         unsafe {
-            mmio::set_mmio_bits32(self.redist_addr + GICR_SGI_BASE, GICR_ISENABLER0, 1 << id);
+            mmio::set_mmio_bits32(self.redist_addr + gicr::SGI_BASE, gicr::ISENABLER0, 1 << id);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -146,15 +191,15 @@ impl Gicv3 {
     /// Sets the priority `prio` to the interrupt `id`
     pub fn set_spi_priority(&self, id: u32, prio: u8) {
         unsafe {
-            let reg_index = id / 4;
-            let reg_offset = (reg_index * 4) as usize;
-            let byte_index_in_reg = id % 4;
-            let bit_shift = byte_index_in_reg * 8;
-            let prio_reg_addr = self.dist_addr + GICD_IPRIORITYR + reg_offset;
+            let reg_index = id / layout::PRIORITY_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let prio_reg_addr = self.dist_addr + gicd::IPRIORITYR + reg_offset;
+            let bit_shift = (id % layout::PRIORITY_PER_REG) * layout::PRIORITY_BITS;
+
             let mut reg_val = mmio::read_mmio32(prio_reg_addr, 0);
-            let mask: u32 = !(0xFF << bit_shift);
-            reg_val &= mask;
+            reg_val &= !(layout::PRIORITY_MASK << bit_shift);
             reg_val |= (prio as u32) << bit_shift;
+
             mmio::write_mmio32(prio_reg_addr, 0, reg_val);
             asm!("dsb sy", options(nostack));
         }
@@ -165,14 +210,15 @@ impl Gicv3 {
     /// Configures the interrupt `id` to be level-sensitive (0b00 in ICFGR)
     pub fn set_spi_trigger_level(&self, id: u32) {
         unsafe {
-            let reg_index = id / 16;
-            let reg_offset = (reg_index * 4) as usize;
-            let bit_shift = (id % 16) * 2;
-            let cfg_reg_addr = self.dist_addr + GICD_ICFGR + reg_offset;
+            let reg_index = id / layout::CONFIG_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let cfg_reg_addr = self.dist_addr + gicd::ICFGR + reg_offset;
+            let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
+
             let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
-            let mask: u32 = !(0b11 << bit_shift);
-            reg_val &= mask;
-            // Level-sensitive: bits = 0b00
+            reg_val &= !(layout::CONFIG_MASK << bit_shift);
+            reg_val |= (Trigger::Level as u32) << bit_shift;
+
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
             asm!("dsb sy", options(nostack));
         }
@@ -183,15 +229,15 @@ impl Gicv3 {
     /// Configures the interrupt `id` to be edge-triggered (0b10 in ICFGR)
     pub fn set_spi_trigger_edge(&self, id: u32) {
         unsafe {
-            let reg_index = id / 16;
-            let reg_offset = (reg_index * 4) as usize;
-            let bit_shift = (id % 16) * 2;
-            let cfg_reg_addr = self.dist_addr + GICD_ICFGR + reg_offset;
+            let reg_index = id / layout::CONFIG_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let cfg_reg_addr = self.dist_addr + gicd::ICFGR + reg_offset;
+            let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
+
             let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
-            let mask: u32 = !(0b11 << bit_shift);
-            reg_val &= mask;
-            // Edge-triggered: bits = 0b10
-            reg_val |= 0b10 << bit_shift;
+            reg_val &= !(layout::CONFIG_MASK << bit_shift);
+            reg_val |= (Trigger::Edge as u32) << bit_shift;
+
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
             asm!("dsb sy", options(nostack));
         }
@@ -202,10 +248,11 @@ impl Gicv3 {
     /// Enables forwarding of the interrupt `id` in the GIC distributor
     pub fn enable_spi(&self, id: u32) {
         unsafe {
-            let reg_index = id / 32;
-            let reg_offset = (reg_index * 4) as usize;
-            let enabler_reg_addr = self.dist_addr + GICD_ISENABLER + reg_offset;
-            let bit_to_set = 1 << (id % 32);
+            let reg_index = id / layout::ENABLE_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let enabler_reg_addr = self.dist_addr + gicd::ISENABLER + reg_offset;
+            let bit_to_set = 1 << (id % layout::ENABLE_PER_REG);
+
             mmio::write_mmio32(enabler_reg_addr, 0, bit_to_set);
             asm!("dsb sy", options(nostack));
         }
@@ -217,8 +264,10 @@ impl Gicv3 {
     /// defines the routing mode by writting the value `core_affinity` into the corresponding register
     pub fn set_spi_routing(&self, id: u32, core_affinity: u64) {
         unsafe {
-            let router_reg_addr = self.dist_addr + GICD_IROUTER + (8 * id as usize);
+            let router_reg_addr =
+                self.dist_addr + gicd::IROUTER + (layout::ROUTER_STRIDE * id as usize);
             let router_ptr = router_reg_addr as *mut u64;
+
             core::ptr::write_volatile(router_ptr, core_affinity);
             asm!("dsb sy", options(nostack));
         }
@@ -229,10 +278,11 @@ impl Gicv3 {
     /// Assigns the SPI `id` to the Group 1
     pub fn set_spi_group(&self, id: u32) {
         unsafe {
-            let reg_index = id / 32;
-            let reg_offset = (reg_index * 4) as usize;
-            let group_reg_addr = self.dist_addr + GICD_IGROUPR + reg_offset;
-            let bit_to_set = 1 << (id % 32);
+            let reg_index = id / layout::ENABLE_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let group_reg_addr = self.dist_addr + gicd::IGROUPR + reg_offset;
+            let bit_to_set = 1 << (id % layout::ENABLE_PER_REG);
+
             mmio::set_mmio_bits32(group_reg_addr, 0, bit_to_set);
             asm!("dsb sy", options(nostack));
         }
@@ -243,15 +293,16 @@ impl Gicv3 {
     /// Configures the interrupt `id` to be level-sensitive (0b00 in ICFGR)
     pub fn set_ppi_trigger_level(&self, id: u32) {
         unsafe {
-            let reg_index = id / 16;
-            let reg_offset = (reg_index * 4) as usize;
-            let bit_shift = (id % 16) * 2;
-            let sgi_base = self.redist_addr + GICR_SGI_BASE;
-            let cfg_reg_addr = sgi_base + GICR_ICFGR + reg_offset;
+            let reg_index = id / layout::CONFIG_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
+            let sgi_base = self.redist_addr + gicr::SGI_BASE;
+            let cfg_reg_addr = sgi_base + gicr::ICFGR + reg_offset;
+
             let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
-            let mask: u32 = !(0b11 << bit_shift);
-            reg_val &= mask;
-            // Level-sensitive: bits = 0b00
+            reg_val &= !(layout::CONFIG_MASK << bit_shift);
+            reg_val |= (Trigger::Level as u32) << bit_shift;
+
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
             asm!("dsb sy", options(nostack));
         }
@@ -262,16 +313,16 @@ impl Gicv3 {
     /// Configures the interrupt `id` to be edge-triggered (0b10 in ICFGR)
     pub fn set_ppi_trigger_edge(&self, id: u32) {
         unsafe {
-            let reg_index = id / 16;
-            let reg_offset = (reg_index * 4) as usize;
-            let bit_shift = (id % 16) * 2;
-            let sgi_base = self.redist_addr + GICR_SGI_BASE;
-            let cfg_reg_addr = sgi_base + GICR_ICFGR + reg_offset;
+            let reg_index = id / layout::CONFIG_PER_REG;
+            let reg_offset = reg_index as usize * layout::REG_BYTES;
+            let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
+            let sgi_base = self.redist_addr + gicr::SGI_BASE;
+            let cfg_reg_addr = sgi_base + gicr::ICFGR + reg_offset;
+
             let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
-            let mask: u32 = !(0b11 << bit_shift);
-            reg_val &= mask;
-            // Edge-triggered: bits = 0b10
-            reg_val |= 0b10 << bit_shift;
+            reg_val &= !(layout::CONFIG_MASK << bit_shift);
+            reg_val |= (Trigger::Edge as u32) << bit_shift;
+
             mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
             asm!("dsb sy", options(nostack));
         }
@@ -281,7 +332,11 @@ impl Gicv3 {
 /// Initializes the GIC with the given distributor and redistributor addresses
 ///
 /// Stores the base addresses and initializes both the distributor (enables Group 1
-/// interrupts and affinity routing) and redistributor (wakes the PE from sleep).
+/// interrupts — single-Security-state view, see `gicd_ctlr`) and redistributor (wakes the
+/// PE from sleep).
+///
+/// Affinity routing is not enabled here: GICD_CTLR.ARE is RAO/WI when GICv2 backwards
+/// compatibility is absent, so it is already in effect and IROUTER writes take effect.
 fn init_gic(dist_addr: usize, redist_addr: usize) {
     unsafe {
         (*addr_of_mut!(GIC)).dist_addr = dist_addr;
@@ -388,11 +443,12 @@ pub fn enable_grp1_ints() {
     unsafe {
         asm!(
             "mrs {tmp}, ICC_IGRPEN1_EL1",
-            "orr {tmp}, {tmp}, #1",
+            "orr {tmp}, {tmp}, {enable}",
             "msr ICC_IGRPEN1_EL1, {tmp}",
             "isb sy",
+            enable = in(reg) icc::IGRPEN1_ENABLE,
             tmp = out(reg) _,
-            options(nostack, nomem, preserves_flags)
+            options(nostack, preserves_flags)
         );
     }
 }
@@ -405,6 +461,7 @@ pub fn enable_grp1_ints() {
 pub fn setup(dev: &device::PlatformDevice) {
     let mut gicd_addr: usize = 0;
     let mut gicr_addr: usize = 0;
+
     // Get #address-cells and #size_cells
     let (addr_cells, size_cells) = dev.get_parent_cells();
     if let Some(reg_prop) = dev.find_property("reg") {
@@ -420,8 +477,10 @@ pub fn setup(dev: &device::PlatformDevice) {
                 gicr_addr = (gicr_addr << 32) | cell as usize;
             }
         }
+
         init_gic(gicd_addr, gicr_addr);
     }
-    set_priority_mask(0xff);
+
+    set_priority_mask(PRIORITY_MASK_ALL);
     enable_grp1_ints();
 }

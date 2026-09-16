@@ -16,12 +16,8 @@ use core::arch::asm;
 use crate::drivers::gic::gicv3;
 use crate::kernel::device;
 use crate::kernel::dtb;
+use crate::kernel::sysreg::timer_ctl;
 use crate::utilities::convert;
-
-/// CNTP_CTL_EL0 bits
-const CTL_ENABLE: u64 = 1 << 0; // Timer enabled
-const CTL_IMASK: u64 = 1 << 1; // Interrupt masked
-const CTL_ISTATUS: u64 = 1 << 2; // Interrupt status (read-only)
 
 /// Returns the timer frequency in Hz
 #[inline(always)]
@@ -85,7 +81,7 @@ pub fn get_compare_value() -> u64 {
 
 /// Reads the control register
 #[inline(always)]
-fn get_ctl() -> u64 {
+fn read_ctl() -> u64 {
     let ctl: u64;
     unsafe {
         asm!("mrs {}, CNTP_CTL_EL0", out(reg) ctl, options(nostack, nomem, preserves_flags));
@@ -95,41 +91,40 @@ fn get_ctl() -> u64 {
 
 /// Writes the control register
 #[inline(always)]
-fn set_ctl(ctl: u64) {
+fn write_ctl(ctl: u64) {
     unsafe {
-        asm!("msr CNTP_CTL_EL0, {}", in(reg) ctl, options(nostack, nomem, preserves_flags));
-        asm!("isb", options(nostack, nomem, preserves_flags));
+        asm!("msr CNTP_CTL_EL0, {}", "isb sy", in(reg) ctl, options(nostack, preserves_flags));
     }
 }
 
 /// Enables the timer
 #[inline(always)]
 pub fn enable() {
-    set_ctl(get_ctl() | CTL_ENABLE);
+    write_ctl(read_ctl() | timer_ctl::ENABLE);
 }
 
 /// Disables the timer
 #[inline(always)]
 pub fn disable() {
-    set_ctl(get_ctl() & !CTL_ENABLE);
+    write_ctl(read_ctl() & !timer_ctl::ENABLE);
 }
 
 /// Masks the timer interrupt (prevents interrupt from firing)
 #[inline(always)]
 pub fn mask_interrupt() {
-    set_ctl(get_ctl() | CTL_IMASK);
+    write_ctl(read_ctl() | timer_ctl::IMASK);
 }
 
 /// Unmasks the timer interrupt (allows interrupt to fire)
 #[inline(always)]
 pub fn unmask_interrupt() {
-    set_ctl(get_ctl() & !CTL_IMASK);
+    write_ctl(read_ctl() & !timer_ctl::IMASK);
 }
 
 /// Returns true if the timer condition is met (timer fired)
 #[inline(always)]
 pub fn is_pending() -> bool {
-    (get_ctl() & CTL_ISTATUS) != 0
+    (read_ctl() & timer_ctl::ISTATUS) != 0
 }
 
 /// Arms the timer to fire after `ticks` counter increments
@@ -137,7 +132,7 @@ pub fn is_pending() -> bool {
 /// This enables the timer and unmasks the interrupt.
 pub fn arm(ticks: u32) {
     set_timer_value(ticks);
-    set_ctl(CTL_ENABLE); // Enable, unmask (IMASK=0)
+    write_ctl(timer_ctl::ENABLE); // Enable, unmask (IMASK=0)
 }
 
 /// Arms the timer to fire after `ms` milliseconds
@@ -145,7 +140,7 @@ pub fn arm(ticks: u32) {
 /// Uses the timer frequency to calculate the appropriate tick count.
 pub fn arm_ms(ms: u32) {
     let freq = get_frequency();
-    let ticks = (freq / 1000) * ms as u64;
+    let ticks = (freq * ms as u64) / 1000;
     arm(ticks as u32);
 }
 

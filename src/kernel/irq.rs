@@ -2,7 +2,6 @@
 
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
-use crate::utilities::mmio;
 use crate::{print, println};
 
 /// CPU register state at the time of an exception
@@ -197,12 +196,7 @@ pub fn do_irq(id: u32) -> u32 {
         }
         // UART RX interrupt
         33 => {
-            let base = pl011::get_base_addr();
-            pl011::RX_BUFFER.lock_irqsafe(|rx| {
-                let ch = mmio::read_mmio32(base, 0) as u8;
-                let _ = rx.push(ch);
-            });
-            mmio::write_mmio32(base, pl011::ICR_OFF, pl011::ICR_RXIC);
+            pl011::handle_rx_interrupt();
         }
         _ => {
             println!("Unhandled IRQ: {}", id);

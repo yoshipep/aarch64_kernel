@@ -110,24 +110,79 @@ struct UartPl011 {
 #[cfg(feature = "qemu-virt")]
 const EARLY_BASE: usize = 0x0900_0000;
 
-/* --- PL011 UART Register Constants --- */
-const DR_OFF: usize = 0x00;
-const FR_OFF: usize = 0x18;
-const FR_BUSY: u32 = 1 << 3;
-const FR_TXFE: u32 = 1 << 5;
-const IBRD_OFF: usize = 0x24;
-const FBRD_OFF: usize = 0x28;
-const LCR_OFF: usize = 0x2c;
-const LCR_FEN: u32 = 1 << 4;
-const LCR_STP2: u32 = 1 << 3;
-const CR_OFF: usize = 0x30;
-const CR_UARTEN: u32 = 1 << 0;
-const CR_RXEN: u32 = 1 << 9;
-const IMSC_OFF: usize = 0x38;
-const IMSC_RXIM: u32 = 1 << 4;
-pub const ICR_OFF: usize = 0x44;
-pub const ICR_RXIC: u32 = 1 << 4;
-const DMACR_OFF: usize = 0x48;
+/* --- PL011 register offsets --- */
+mod reg {
+    pub const DR: usize = 0x00; // UARTDR: Data Register
+    pub const FR: usize = 0x18; // UARTFR: Flag Register
+    pub const IBRD: usize = 0x24; // UARTIBRD: Integer Baud Rate Divisor
+    pub const FBRD: usize = 0x28; // UARTFBRD: Fractional Baud Rate Divisor
+    pub const LCR_H: usize = 0x2c; // UARTLCR_H: Line Control Register
+    pub const CR: usize = 0x30; // UARTCR: Control Register
+    pub const IMSC: usize = 0x38; // UARTIMSC: Interrupt Mask set/clear Register
+    pub const ICR: usize = 0x44; // UARTICR: Interrupt Clear Register
+    pub const DMACR: usize = 0x48; // UARTDMACR: DMA Control Register
+}
+
+/* --- UARTFR: flag register --- */
+#[allow(dead_code)]
+mod fr {
+    pub const BUSY: u32 = 1 << 3; // Transmitter busy
+    pub const RXFE: u32 = 1 << 4; // RX FIFO empty
+    pub const TXFF: u32 = 1 << 5; // TX FIFO full
+    pub const RXFF: u32 = 1 << 6; // RX FIFO full
+    pub const TXFE: u32 = 1 << 7; // TX FIFO empty
+}
+
+/* --- UARTLCR_H: line control --- */
+#[allow(dead_code)]
+mod lcr_h {
+    pub const PEN: u32 = 1 << 1; // Parity enable
+    pub const EPS: u32 = 1 << 2; // Even parity select
+    pub const STP2: u32 = 1 << 3; // 2 stop bits (0 = 1 stop bit)
+    pub const FEN: u32 = 1 << 4; // Enable FIFOs
+
+    /// Word Length, bits [6:5]
+    #[derive(Clone, Copy)]
+    #[repr(u32)]
+    pub enum WordLen {
+        Bits5 = 0b00 << 5,
+        Bits6 = 0b01 << 5,
+        Bits7 = 0b10 << 5,
+        Bits8 = 0b11 << 5,
+    }
+}
+
+/* --- UARTCR: control --- */
+#[allow(dead_code)]
+mod cr {
+    pub const UARTEN: u32 = 1 << 0; // UART enable
+    pub const LBE: u32 = 1 << 7; // Loopback enable
+    pub const TXE: u32 = 1 << 8; // Transmit enable
+    pub const RXE: u32 = 1 << 9; // Receive enable
+}
+
+/* --- Baud-rate divisor fixed-point layout ---
+ * BAUDDIV is a 22.6 fixed-point value (4 * UARTCLK / baud): the integer part goes in
+ * UARTIBRD.BAUD_DIVINT [15:0], the 6-bit fraction in UARTFBRD.BAUD_DIVFRAC [5:0].
+ */
+#[allow(dead_code)]
+mod baud {
+    pub const FRAC_BITS: u32 = 6; // width of UARTFBRD.BAUD_DIVFRAC
+    pub const INT_MASK: u32 = 0xffff; // width of UARTIBRD.BAUD_DIVINT
+    pub const FRAC_MASK: u32 = 0x3f; // mask for the 6-bit fractional part
+}
+
+/* --- Interrupt bits: identical layout in IMSC / RIS / MIS / ICR --- */
+#[allow(dead_code)]
+mod int {
+    pub const RX: u32 = 1 << 4; // Receive Interrupt Mask
+    pub const TX: u32 = 1 << 5; // Transmit Interrupt Mask
+    pub const RT: u32 = 1 << 6; // Receive timeout Interrupt Mask
+    pub const FE: u32 = 1 << 7; // Framing error Interrupt Mask
+    pub const PE: u32 = 1 << 8; // Parity error Interrupt Mask
+    pub const BE: u32 = 1 << 9; // Break error Interrupt Mask
+    pub const OE: u32 = 1 << 10; // Overrun error Interrupt Mask
+}
 
 /// The global, mutable instance representing the system's UART device
 static mut UART: UartPl011 = UartPl011::new();
@@ -168,40 +223,65 @@ impl UartPl011 {
     /// Configure the UART hardware registers
     pub fn configure(&self) {
         // 1. Disable the UART
-        mmio::write_mmio32(self.base_addr as usize, CR_OFF, 0);
+        mmio::write_mmio32(self.base_addr as usize, reg::CR, 0);
+
         // 2. Wait for the end of TX
-        while (mmio::read_mmio32(self.base_addr as usize, FR_OFF) & FR_BUSY) != 0 {}
+        while (mmio::read_mmio32(self.base_addr as usize, reg::FR) & fr::BUSY) != 0 {}
+
         // 3. Flush RX/TX fifos
-        mmio::clear_mmio_bits32(self.base_addr as usize, LCR_OFF, LCR_FEN);
+        mmio::clear_mmio_bits32(self.base_addr as usize, reg::LCR_H, lcr_h::FEN);
 
         // 4. Set speed
         self.set_speed();
 
         // 5. Configure the data frame format
-        let mut lcr_val: u32 = 0;
-        // 5.1 Word length: bits 5 and 6
-        lcr_val |= ((self.data_bits as u32 - 1) & 0x3) << 5;
-        // 5.2 Use 1 or 2 stop bits: bit LCR_STP2
-        if self.stop_bits == 2 {
-            lcr_val |= LCR_STP2;
-        }
-        // 6. Enable FIFOs
-        lcr_val |= LCR_FEN;
+        // 5.1 Word length: bits [6:5]
+        let word_len = match self.data_bits {
+            5 => lcr_h::WordLen::Bits5,
+            6 => lcr_h::WordLen::Bits6,
+            7 => lcr_h::WordLen::Bits7,
+            _ => lcr_h::WordLen::Bits8,
+        };
 
-        mmio::write_mmio32(self.base_addr as usize, LCR_OFF, lcr_val);
+        let mut lcr_val = word_len as u32;
+        // 5.2 Use 1 or 2 stop bits
+        if self.stop_bits == 2 {
+            lcr_val |= lcr_h::STP2;
+        }
+
+        // 6. Enable FIFOs
+        lcr_val |= lcr_h::FEN;
+        mmio::write_mmio32(self.base_addr as usize, reg::LCR_H, lcr_val);
+
         // 7. Enable RX interrupt
-        mmio::set_mmio_bits32(self.base_addr as usize, IMSC_OFF, IMSC_RXIM);
-        // 8. Disable DMA
-        mmio::write_mmio32(self.base_addr as usize, DMACR_OFF, 0x01);
-        // 9. Enable RX and UART
-        mmio::set_mmio_bits32(self.base_addr as usize, CR_OFF, CR_UARTEN | CR_RXEN);
+        mmio::set_mmio_bits32(self.base_addr as usize, reg::IMSC, int::RX);
+
+        // 8. Disable DMA (RXDMAE/TXDMAE cleared; 0 is also the reset value)
+        mmio::write_mmio32(self.base_addr as usize, reg::DMACR, 0);
+
+        // 9. Enable TX, RX and UART (TXE+UARTEN required to transmit, RXE+UARTEN to receive)
+        mmio::set_mmio_bits32(
+            self.base_addr as usize,
+            reg::CR,
+            cr::UARTEN | cr::TXE | cr::RXE,
+        );
     }
 
     /// Set baud rate divisor registers
     fn set_speed(&self) {
         let baud_div = 4 * self.base_clock / self.baudrate;
-        mmio::write_mmio32(self.base_addr as usize, IBRD_OFF, (baud_div >> 6) & 0xffff);
-        mmio::write_mmio32(self.base_addr as usize, FBRD_OFF, baud_div & 0x3f);
+
+        mmio::write_mmio32(
+            self.base_addr as usize,
+            reg::IBRD,
+            (baud_div >> baud::FRAC_BITS) & baud::INT_MASK,
+        );
+
+        mmio::write_mmio32(
+            self.base_addr as usize,
+            reg::FBRD,
+            baud_div & baud::FRAC_MASK,
+        );
     }
 
     /// Write a single byte
@@ -214,8 +294,10 @@ impl UartPl011 {
         } else {
             self.base_addr as usize
         };
-        while (mmio::read_mmio32(base, FR_OFF) & FR_TXFE) != 0 {}
-        mmio::write_mmio32(base, DR_OFF, c as u32);
+
+        while (mmio::read_mmio32(base, reg::FR) & fr::TXFF) != 0 {}
+
+        mmio::write_mmio32(base, reg::DR, c as u32);
     }
 }
 
@@ -270,6 +352,20 @@ pub fn putchar(c: u8) {
 /// Reads a single byte from the interrupt-driven RX buffer
 pub fn getchar() -> Option<u8> {
     return RX_BUFFER.lock_irqsafe(|rx| rx.pop());
+}
+
+/// Drains the pending RX byte into the buffer and clears the RX interrupt
+///
+/// Called from the UART IRQ handler; keeps all PL011 register access inside the driver.
+pub fn handle_rx_interrupt() {
+    let base = get_base_addr();
+
+    RX_BUFFER.lock_irqsafe(|rx| {
+        let ch = mmio::read_mmio32(base, reg::DR) as u8;
+        let _ = rx.push(ch);
+    });
+
+    mmio::write_mmio32(base, reg::ICR, int::RX);
 }
 
 /// Returns the UART base address

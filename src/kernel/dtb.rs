@@ -1,22 +1,21 @@
 //! Flattened Device Tree (FDT) parser
 //!
-//! This module parses the Device Tree Blob (DTB) provided by the bootloader or firmware to
-//! discover hardware devices and their configuration. The DTB is a binary representation of the
-//! device tree, a data structure that describes the hardware topology of the system.
+//! This module parses the Device Tree Blob (DTB) provided by the bootloader or firmware to discover hardware devices
+//! and their configuration. The DTB is a binary representation of the device tree, a data structure that describes the
+//! hardware topology of the system.
 //!
 //! ## Parsing Strategy
 //!
-//! The parser walks the DTB structure block token by token, building a flat device table. Each
-//! DTB node becomes a `PlatformDevice` entry with its properties stored directly in the table.
-//! A depth stack tracks parent-child relationships. After parsing, `init_devices` matches
-//! discovered devices against the configured driver table and calls their setup functions.
+//! The parser walks the DTB structure block token by token, building a flat device table. Each DTB node becomes a
+//! `PlatformDevice` entry with its properties stored directly in the table. A depth stack tracks parent-child
+//! relationships. After parsing, `init_devices` matches discovered devices against the configured driver table and
+//! calls their setup functions.
 //!
 //! ## Initialization Order
 //!
-//! Device initialization is done in two passes:
-//! 1. **First pass**: Initialize the interrupt controller (GIC), since other devices need it
-//!    to configure their interrupts
-//! 2. **Second pass**: Initialize all remaining devices (UART, timer, etc.)
+//! Device initialization is done in two passes: 1. **First pass**: Initialize the interrupt controller (GIC), since
+//! other devices need it to configure their interrupts 2. **Second pass**: Initialize all remaining devices (UART,
+//! timer, etc.)
 
 use core;
 
@@ -55,21 +54,21 @@ static mut PHANDLE_TABLE: [(u32, usize); MAX_HANDLES] = [(0, 0); MAX_HANDLES];
 
 /// Flattened Device Tree header
 ///
-/// The first 40 bytes of the DTB contain this header, which describes the layout
-/// and version of the blob. All fields are stored in big-endian byte order.
+/// The first 40 bytes of the DTB contain this header, which describes the layout and version of the blob. All fields
+/// are stored in big-endian byte order.
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct FdtHeader {
-    pub magic: u32,             // 0x00: Must be 0xd00dfeed
-    pub totalsize: u32,         // 0x04: Total DTB size
-    pub off_dt_struct: u32,     // 0x08: Offset to structure block
-    pub off_dt_strings: u32,    // 0x0C: Offset to strings block
-    pub off_mem_rsvmap: u32,    // 0x10: Offset to memory reserve map
-    pub version: u32,           // 0x14: DTB version
-    pub last_comp_version: u32, // 0x18: Last compatible version
-    pub boot_cpuid_phys: u32,   // 0x1C: Boot CPU ID
-    pub size_dt_strings: u32,   // 0x20: Strings block size
-    pub size_dt_struct: u32,    // 0x24: Structure block size
+struct FdtHeader {
+    magic: u32,             // 0x00: Must be 0xd00dfeed
+    totalsize: u32,         // 0x04: Total DTB size
+    off_dt_struct: u32,     // 0x08: Offset to structure block
+    off_dt_strings: u32,    // 0x0C: Offset to strings block
+    off_mem_rsvmap: u32,    // 0x10: Offset to memory reserve map
+    version: u32,           // 0x14: DTB version
+    last_comp_version: u32, // 0x18: Last compatible version
+    boot_cpuid_phys: u32,   // 0x1C: Boot CPU ID
+    size_dt_strings: u32,   // 0x20: Strings block size
+    size_dt_struct: u32,    // 0x24: Structure block size
 }
 
 impl FdtHeader {
@@ -95,13 +94,13 @@ impl FdtHeader {
 
 /// Header preceding each property value in the structure block
 ///
-/// Each `FDT_PROP` token is followed by this 8-byte header containing the property's
-/// value length and an offset into the strings block for the property name.
+/// Each `FDT_PROP` token is followed by this 8-byte header containing the property's value length and an offset into
+/// the strings block for the property name.
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct FdtPropHeader {
-    pub len: u32,
-    pub nameoff: u32,
+struct FdtPropHeader {
+    len: u32,
+    nameoff: u32,
     // We can't efficiently add data until we implement a memory allocator
 }
 
@@ -133,10 +132,14 @@ fn get_property_name(dtb_addr: usize, off_dt_strings: usize, offset: u32) -> &'s
 
 /// Parses the Flattened Device Tree at address `dtb`
 ///
-/// Walks the DTB structure block token by token, creating a `PlatformDevice` for each node
-/// and storing its properties in the global `DEVICE_TABLE`. A depth stack tracks parent-child
-/// relationships so each device can reference its parent. After parsing, calls `init_devices`
-/// to match discovered devices against the driver table and initialize them.
+/// Walks the DTB structure block token by token, creating a `PlatformDevice` for each node and storing its properties
+/// in the global `DEVICE_TABLE`. A depth stack tracks parent-child relationships so each device can reference its
+/// parent. After parsing, calls `init_devices` to match discovered devices against the driver table and initialize
+/// them.
+///
+/// # Arguments
+///
+/// * `dtb` - physical address of the Flattened Device Tree blob
 #[unsafe(no_mangle)]
 pub fn parse_dtb(dtb: usize) {
     let header = FdtHeader::from_be_bytes(dtb);
@@ -238,6 +241,15 @@ pub fn parse_dtb(dtb: usize) {
 }
 
 /// Find a device by its phandle value
+///
+/// # Arguments
+///
+/// * `phandle` - a DT node's unique identifier, as referenced by another node's property (e.g. `interrupt-parent`,
+///   `clocks`) to point back to it
+///
+/// # Returns
+///
+/// `Some(device)` if a device with that phandle was registered during parsing, `None` otherwise.
 pub fn find_device_by_phandle(phandle: u32) -> Option<&'static device::PlatformDevice> {
     unsafe {
         for i in 0..PHANDLE_COUNT {
@@ -251,7 +263,10 @@ pub fn find_device_by_phandle(phandle: u32) -> Option<&'static device::PlatformD
 }
 
 /// Find the interrupt parent for a device by walking up the tree
-/// Returns the interrupt controller device if found
+///
+/// # Returns
+///
+/// `Some(device)` for the interrupt controller if one was found, `None` otherwise.
 pub fn find_interrupt_parent(
     dev: &device::PlatformDevice,
 ) -> Option<&'static device::PlatformDevice> {
@@ -273,7 +288,8 @@ pub fn find_interrupt_parent(
     None
 }
 
-/// Check if a compatible property value contains a specific string.
+/// Check if a compatible property value contains a specific string
+///
 /// Compatible values can have multiple null-separated strings (e.g., "arm,pl011\0arm,primecell\0")
 fn compatible_matches(prop: &device::Property, target: &str) -> bool {
     let mut offset = 0;
@@ -302,10 +318,8 @@ fn compatible_matches(prop: &device::Property, target: &str) -> bool {
 
 /// Initializes all discovered devices by matching against the driver table
 ///
-/// Runs in two passes:
-/// 1. First initializes the GIC (interrupt controller), since other devices depend on it
-///    to configure their interrupts
-/// 2. Then initializes all remaining devices (UART, timer, etc.)
+/// Runs in two passes: 1. First initializes the GIC (interrupt controller), since other devices depend on it to
+/// configure their interrupts 2. Then initializes all remaining devices (UART, timer, etc.)
 pub fn init_devices() {
     unsafe {
         // First pass: initialize GIC (interrupt controller must be ready before other devices)

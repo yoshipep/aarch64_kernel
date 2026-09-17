@@ -18,11 +18,11 @@ pub mod utilities;
 
 /// Kernel main function
 ///
-/// This is the entry point for the Rust kernel code, called from assembly after hardware
-/// initialization. It receives the device tree address as a parameter.
+/// This is the entry point for the Rust kernel code, called from assembly after hardware initialization. It receives
+/// the device tree address as a parameter.
 ///
 /// # Arguments
-/// * `dtb_addr` - The address of the Flattened Device Tree (currently unused)
+/// * `dtb_addr` - Physical address of the Flattened Device Tree blob, provided by the bootloader
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain(dtb_addr: usize) {
     dtb::parse_dtb(dtb_addr);
@@ -40,8 +40,8 @@ pub extern "C" fn kmain(dtb_addr: usize) {
 
 /// Panic handler for no_std environment
 ///
-/// This function is called when the kernel panics. Since we're in a bare-metal environment
-/// with no standard library, we must define our own panic behavior.
+/// This function is called when the kernel panics. Since we're in a bare-metal environment with no standard library, we
+/// must define our own panic behavior.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {

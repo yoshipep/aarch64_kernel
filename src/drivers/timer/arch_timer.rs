@@ -1,7 +1,7 @@
 //! ARM Generic Timer driver (non-secure physical timer)
 //!
-//! This module provides functions to interact with the ARM Generic Timer,
-//! specifically the non-secure physical timer accessible at EL1.
+//! This module provides functions to interact with the ARM Generic Timer, specifically the non-secure physical timer
+//! accessible at EL1.
 //!
 //! ## Timer Registers
 //!
@@ -153,9 +153,9 @@ pub fn rearm(ticks: u32) {
 
 /// Sets up the ARM Generic Timer from device tree properties
 ///
-/// Parses the `interrupts` property to find the non-secure physical timer interrupt
-/// (second entry in the timer node's interrupt list), then configures it as a PPI
-/// in the GIC redistributor with appropriate trigger mode, priority, and group.
+/// Parses the `interrupts` property to find the non-secure physical timer interrupt (second entry in the timer node's
+/// interrupt list), then configures it as a PPI in the GIC redistributor with appropriate trigger mode, priority, and
+/// group.
 pub fn setup(dev: &device::PlatformDevice) {
     let mut interrupt_info: [u32; gicv3::MAX_INTERRUPT_CELLS] = [0; gicv3::MAX_INTERRUPT_CELLS];
     // Parse interrupts property
@@ -189,7 +189,7 @@ pub fn setup(dev: &device::PlatformDevice) {
                     gicv3::set_ppi_trigger_level(ppi_id);
                 }
                 gicv3::set_ppi_priority(ppi_id, 0x00);
-                gicv3::set_ppi_group(ppi_id);
+                gicv3::set_ppi_group1(ppi_id);
                 gicv3::enable_ppi(ppi_id);
             }
         }

@@ -37,25 +37,30 @@ pub trait Descriptor: Sized {
 
     /// Builds a descriptor directly from a raw 64-bit value, with no validation.
     ///
-    /// Low-level escape hatch that bypasses the typed builders. For normal construction prefer
-    /// `invalid()` followed by the typed setters (`set_type`, `set_output_address`, and the level's
-    /// leaf/table setters), which enforce valid field encodings.
+    /// Low-level escape hatch that bypasses the typed builders. For normal construction prefer `invalid()` followed by
+    /// the typed setters (`set_type`, `set_output_address`, and the level's leaf/table setters), which enforce valid
+    /// field encodings.
     fn new(raw: u64) -> Self;
 
     fn raw(&self) -> u64;
 
     fn raw_mut(&mut self) -> &mut u64;
 
+    /// Builds a fresh descriptor with all bits zero — the `Invalid` type encoding (bit 0 = 0). A constructor, not a
+    /// mutator: it doesn't invalidate an existing descriptor, it creates a new empty one, to be filled in with
+    /// `set_type` and the level's other setters.
     #[inline]
     fn invalid() -> Self {
         Self::new(0)
     }
 
+    /// Returns whether the descriptor's valid bit (bit 0) is set
     #[inline]
     fn is_valid(&self) -> bool {
         self.raw() & 0b1 != 0
     }
 
+    /// Sets the descriptor's type field (bits \[1:0\]) to `type_`, leaving other bits untouched
     #[inline]
     fn set_type(&mut self, type_: DescriptorType) {
         *self.raw_mut() =
@@ -64,14 +69,15 @@ pub trait Descriptor: Sized {
 
     /// Raw-ORs a bitmask of attribute bits into the descriptor.
     ///
-    /// Escape hatch for the independent attribute flags (e.g. `leaf::UXN | leaf::AF`); it neither
-    /// clears nor validates anything. For the pick-one fields prefer the typed setters
-    /// (`set_shareability`, `set_ap`, `set_mair_range`), which guarantee valid encodings.
+    /// Escape hatch for the independent attribute flags (e.g. `leaf::UXN | leaf::AF`); it neither clears nor validates
+    /// anything. For the pick-one fields prefer the typed setters (`set_shareability`, `set_ap`, `set_mair_range`),
+    /// which guarantee valid encodings.
     #[inline]
     fn set_attrs(&mut self, attrs: u64) {
         *self.raw_mut() |= attrs;
     }
 
+    /// Sets the descriptor's output-address field to `pa`, masked to `ADDR_MASK`
     #[inline]
     fn set_output_address(&mut self, pa: u64) {
         *self.raw_mut() = (*self.raw_mut() & !ADDR_MASK) | (pa & ADDR_MASK);
@@ -81,6 +87,7 @@ pub trait Descriptor: Sized {
 // Extra behavior for table descriptors: they point to the next-level table.
 // Implemented for the levels that can hold a table (Pgd, Pud, Pmd), not Pte.
 pub trait TableDescriptor: Descriptor {
+    /// Points this table descriptor at the next-level table's physical address
     #[inline]
     fn set_next_table(&mut self, table_pa: u64) {
         self.set_output_address(table_pa);
@@ -92,22 +99,27 @@ pub trait TableDescriptor: Descriptor {
 pub trait LeafDescriptor: Descriptor {
     const ATTR_IDX_SHIFT: u64 = 2;
 
+    /// Sets the AttrIndx field (bits \[4:2\]) to the given MAIR_EL1 slot
     #[inline]
     fn set_mair_range(&mut self, idx: MairIdx) {
         *self.raw_mut() |= (idx as u64) << Self::ATTR_IDX_SHIFT;
     }
 
+    /// Sets the SH field (bits \[9:8\]) to the given shareability domain
     #[inline]
     fn set_shareability(&mut self, sh: Shareability) {
         *self.raw_mut() |= sh as u64;
     }
 
+    /// Sets the AP field (bits \[7:6\]) to the given access-permission level
     #[inline]
     fn set_ap(&mut self, ap: Ap) {
         *self.raw_mut() |= ap as u64;
     }
 }
 
+/// L0 table descriptor (covers 512 GiB per entry). Only ever `Invalid` or `Table` — a leaf (`Block`/`Page`) encoding
+/// isn't valid at this level.
 #[derive(Clone, Copy)]
 pub struct Pgd(u64);
 
@@ -130,6 +142,8 @@ impl Descriptor for Pgd {
 
 impl TableDescriptor for Pgd {}
 
+/// L1 table-or-block descriptor (or `Invalid`, unmapped). `Table` covers 1 GiB per entry (points to an L2 table);
+/// `Block` maps 1 GiB directly as a leaf — the huge-page case this kernel's identity map uses.
 #[derive(Clone, Copy)]
 pub struct Pud(u64);
 
@@ -154,6 +168,8 @@ impl TableDescriptor for Pud {}
 
 impl LeafDescriptor for Pud {}
 
+/// L2 table-or-block descriptor (or `Invalid`, unmapped). `Table` covers 2 MiB per entry (points to an L3 table);
+/// `Block` maps 2 MiB directly as a leaf (huge page).
 #[derive(Clone, Copy)]
 pub struct Pmd(u64);
 
@@ -178,6 +194,9 @@ impl TableDescriptor for Pmd {}
 
 impl LeafDescriptor for Pmd {}
 
+/// L3 page descriptor (covers 4 KiB per entry). Only ever `Invalid` or `Page` — the `Page` type encoding (bits \[1:0\]
+/// = `0b11`) means "page" at this level, unlike the same encoding meaning "table" at L0-L2 (see
+/// `DescriptorType::Table`).
 #[derive(Clone, Copy)]
 pub struct Pte(u64);
 

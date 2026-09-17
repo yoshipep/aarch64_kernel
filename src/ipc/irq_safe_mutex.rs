@@ -1,15 +1,18 @@
 //! An interrupt-safe Spinlock Mutex
 //!
-//! This module provides a fundamental synchronization primitive. The central component is a `Mutex` that uses a spinlock for mutual exclusion.
+//! This module provides a fundamental synchronization primitive. The central component is a `Mutex` that uses a
+//! spinlock for mutual exclusion.
 //!
-//! It's most critical feature is the `lock_irqsafe` method, which is essential for preventing
-//! deadlocks between main kernel code and Interrupt Service Routines (ISR).
+//! It's most critical feature is the `lock_irqsafe` method, which is essential for preventing deadlocks between main
+//! kernel code and Interrupt Service Routines (ISR).
 
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Disable IRQs in the CPU
+///
+/// Returns the prior `daif` state, to be passed to `restore_interrupts` once the critical section ends.
 #[inline(always)]
 fn disable_irq() -> u64 {
     let daif: u64;
@@ -32,23 +35,21 @@ fn restore_interrupts(daif: u64) {
 
 /// A mutually exclusive (Mutex) primitive based on a spinlock
 ///
-/// This Mutex provides safe interior mutability by ensuring that only one thread can access the
-/// contained data at any given time. It uses an atomic boolean flag and a busy-wait loop to
-/// achieve this.
+/// This Mutex provides safe interior mutability by ensuring that only one thread can access the contained data at any
+/// given time. It uses an atomic boolean flag and a busy-wait loop to achieve this.
 pub struct Mutex<T> {
     /// The atomic flag used to control access. `false` means unlocked, `true` locked
     lock: AtomicBool,
-    /// The data protected by the mutex, wrapped in an `UnsafeCell` to allow mutable access through
-    /// a shared reference
+    /// The data protected by the mutex, wrapped in an `UnsafeCell` to allow mutable access through a shared reference
     data: UnsafeCell<T>,
 }
 
-/// Safety: The `Mutex` is safe to share across threads because access to the inner `UnsafeCell` is
-/// guarded by the atomic `lock`
+/// Safety: The `Mutex` is safe to share across threads because access to the inner `UnsafeCell` is guarded by the
+/// atomic `lock`
 unsafe impl<T> Sync for Mutex<T> {}
 
-/// Safety: The `Mutex` is safe to send to another thread, as the data `T` is owned by the Mutex
-/// and the lock mechanism is thread-safe
+/// Safety: The `Mutex` is safe to send to another thread, as the data `T` is owned by the Mutex and the lock mechanism
+/// is thread-safe
 unsafe impl<T> Send for Mutex<T> {}
 
 impl<T> Mutex<T> {
@@ -63,12 +64,10 @@ impl<T> Mutex<T> {
     /// Acquires the lock and provides mutable access to the protected data
     ///
     /// # Memory Ordering
-    /// - **Acquire**: An `Acquire` memory ordering is used when obtaining the lock. This ensures
-    ///     that all memory operations happening *after* acquiring the lock are not reordered to before
-    ///     it.
-    /// - **Release**: A `Release` memory ordering is used when releasing the lock. This ensures
-    ///     that all memory operations happening *before* releasing the lock are not reordered to after
-    ///     it.
+    /// - **Acquire**: An `Acquire` memory ordering is used when obtaining the lock. This ensures that all memory
+    ///   operations happening *after* acquiring the lock are not reordered to before it.
+    /// - **Release**: A `Release` memory ordering is used when releasing the lock. This ensures that all memory
+    ///   operations happening *before* releasing the lock are not reordered to after it.
     pub fn lock<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         while self
             .lock

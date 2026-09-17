@@ -186,10 +186,10 @@ run-kernel: $(KERNEL_ELF) $(DTB_FILE)
 			-kernel $(KERNEL_ELF) -dtb $(DTB_FILE)
 
 doc:
-	cargo doc --target $(TARGET) --no-deps --target-dir $(DOC_DIR)
+	cargo doc --target $(TARGET) --no-deps --document-private-items --target-dir $(DOC_DIR)
 
 doc-open:
-	cargo doc --target $(TARGET) --no-deps --target-dir $(DOC_DIR) --open
+	cargo doc --target $(TARGET) --no-deps --document-private-items --target-dir $(DOC_DIR) --open
 
 clean: clean-kernel clean-bootloader clean-common
 

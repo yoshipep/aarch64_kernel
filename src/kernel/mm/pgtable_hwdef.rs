@@ -31,21 +31,30 @@ pub mod leaf {
 
     // Mutually-exclusive fields — pick exactly one. Modeled as enums so an invalid
     // encoding can't be built; the discriminant is the field value already in place.
+
+    /// Shareability domain — bits \[9:8\] of a leaf descriptor. `0b01` is reserved and therefore has no variant here.
     #[derive(Clone, Copy)]
     #[repr(u64)]
     pub enum Shareability {
-        NonShareable = 0b00 << 8, // [9:8] private to this CPU — use for Device memory
-        Outer = 0b10 << 8,        // [9:8] coherent with DMA masters / outer caches
-        Inner = 0b11 << 8,        // [9:8] coherent across all CPUs — use for Normal memory
-                                  // 0b01 is reserved and therefore unrepresentable
+        /// Private to this CPU. Use for Device memory.
+        NonShareable = 0b00 << 8,
+        /// Coherent with DMA masters / outer caches.
+        Outer = 0b10 << 8,
+        /// Coherent across all CPUs. Use for Normal memory.
+        Inner = 0b11 << 8,
     }
 
+    /// Data access permission — bits \[7:6\] of a leaf descriptor
     #[derive(Clone, Copy)]
     #[repr(u64)]
     pub enum Ap {
-        RwEl1 = 0b00 << 6, // [7:6] EL1 read/write, EL0 no access
-        RwAll = 0b01 << 6, // [7:6] EL1 and EL0 read/write
-        RoEl1 = 0b10 << 6, // [7:6] EL1 read-only, EL0 no access
-        RoAll = 0b11 << 6, // [7:6] EL1 and EL0 read-only
+        /// EL1 read/write, EL0 no access
+        RwEl1 = 0b00 << 6,
+        /// EL1 and EL0 read/write
+        RwAll = 0b01 << 6,
+        /// EL1 read-only, EL0 no access
+        RoEl1 = 0b10 << 6,
+        /// EL1 and EL0 read-only
+        RoAll = 0b11 << 6,
     }
 }

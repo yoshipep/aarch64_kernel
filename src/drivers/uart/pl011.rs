@@ -6,18 +6,17 @@
 //!
 //! The driver uses a mixed model for handling communication:
 //!
-//! - **Transmission (TX):** Writing characters (`putchar`, `print`) is done via **polling**. The
-//!   code will wait in a loop until the UART's transmit buffer is ready to accept a new character.
+//! - **Transmission (TX):** Writing characters (`putchar`, `print`) is done via **polling**. The code will wait in a
+//!   loop until the UART's transmit buffer is ready to accept a new character.
 //!
-//! - **Reception (RX):** Receiving characters is **interrupt-driven**. The interrupt handler (defined
-//!   in `exceptions.rs`) reads the incoming byte and `push` it into the global `RX_BUFFER`. The
-//!   `getchar` function then safely reads from this buffer.
+//! - **Reception (RX):** Receiving characters is **interrupt-driven**. The interrupt handler (defined in
+//!   `exceptions.rs`) reads the incoming byte and `push` it into the global `RX_BUFFER`. The `getchar` function then
+//!   safely reads from this buffer.
 //!
 //! ## Concurrency
 //!
-//! The global `RX_BUFFER` is shared between the UART and any kernel code that calls `getchar`. To
-//! prevent race conditions and deadlocks, it is protected by the interrupt safe `Mutex` from
-//! `crate::irq_safe_mutex`
+//! The global `RX_BUFFER` is shared between the UART and any kernel code that calls `getchar`. To prevent race
+//! conditions and deadlocks, it is protected by the interrupt safe `Mutex` from `crate::irq_safe_mutex`
 
 use core::ptr::addr_of_mut;
 use core::sync::atomic::AtomicUsize;
@@ -35,8 +34,8 @@ const UART_BUFFER_SIZE: usize = 256;
 
 /// A circular buffer for storing incoming UART data
 ///
-/// This buffer is designed to be written to by the UART interrupt handler and read from the
-/// kernel's main execution context
+/// This buffer is designed to be written to by the UART interrupt handler and read from the kernel's main execution
+/// context
 pub struct UartBuffer {
     /// The underlying array for the buffer
     buffer: [u8; UART_BUFFER_SIZE],
@@ -48,9 +47,8 @@ pub struct UartBuffer {
 
 /// Global static instance of the UART RX buffer.
 ///
-/// This buffer is protected by the interrupt-safe `Mutex` to allow for safe, concurrent access
-/// from both the UART interrupt handler (the producer) and the kernel's character-reading
-/// functions (the consumer)
+/// This buffer is protected by the interrupt-safe `Mutex` to allow for safe, concurrent access from both the UART
+/// interrupt handler (the producer) and the kernel's character-reading functions (the consumer)
 pub static RX_BUFFER: Mutex<UartBuffer> = Mutex::new(UartBuffer {
     buffer: [0; UART_BUFFER_SIZE],
     head: AtomicUsize::new(0),
@@ -105,8 +103,8 @@ struct UartPl011 {
 
 /// Early console base address (used before DTB-based driver initialization)
 ///
-/// The bootloader/firmware is expected to have already configured the UART
-/// at this address. The early console just writes to it — no hardware setup.
+/// The bootloader/firmware is expected to have already configured the UART at this address. The early console just
+/// writes to it — no hardware setup.
 #[cfg(feature = "qemu-virt")]
 const EARLY_BASE: usize = 0x0900_0000;
 
@@ -141,7 +139,7 @@ mod lcr_h {
     pub const STP2: u32 = 1 << 3; // 2 stop bits (0 = 1 stop bit)
     pub const FEN: u32 = 1 << 4; // Enable FIFOs
 
-    /// Word Length, bits [6:5]
+    /// Word Length, bits \[6:5\]
     #[derive(Clone, Copy)]
     #[repr(u32)]
     pub enum WordLen {
@@ -200,24 +198,15 @@ impl UartPl011 {
     }
 
     /// Initialize with hardware-specific details
+    ///
+    /// # Arguments
+    ///
+    /// * `base_addr` - MMIO base address of the UART's register block
+    /// * `base_clock` - input clock frequency (Hz) driving the UART, used by `set_speed` to compute the baud-rate
+    ///   divisor
     pub fn init(&mut self, base_addr: *mut u32, base_clock: u32) {
         self.base_addr = base_addr;
         self.base_clock = base_clock;
-    }
-
-    /// Set baud rate
-    pub fn set_baudrate(&mut self, baudrate: u32) {
-        self.baudrate = baudrate;
-    }
-
-    /// Set data bits
-    pub fn set_data_bits(&mut self, data_bits: u8) {
-        self.data_bits = data_bits;
-    }
-
-    /// Set stop bits
-    pub fn set_stop_bits(&mut self, stop_bits: u8) {
-        self.stop_bits = stop_bits;
     }
 
     /// Configure the UART hardware registers
@@ -286,8 +275,7 @@ impl UartPl011 {
 
     /// Write a single byte
     ///
-    /// If the UART has not been initialized yet (base address is null),
-    /// falls back to the early console base address.
+    /// If the UART has not been initialized yet (base address is null), falls back to the early console base address.
     pub fn putchar(&self, c: u8) {
         let base = if self.base_addr.is_null() {
             EARLY_BASE
@@ -308,31 +296,10 @@ fn init_uart(base_addr: *mut u32, base_clock: u32) {
     }
 }
 
-/// Sets the baud rate (call before configure_uart)
-pub fn set_baudrate(baudrate: u32) {
-    unsafe {
-        (*addr_of_mut!(UART)).set_baudrate(baudrate);
-    }
-}
-
-/// Sets the number of data bits (call before configure_uart)
-pub fn set_data_bits(data_bits: u8) {
-    unsafe {
-        (*addr_of_mut!(UART)).set_data_bits(data_bits);
-    }
-}
-
-/// Sets the number of stop bits (call before configure_uart)
-pub fn set_stop_bits(stop_bits: u8) {
-    unsafe {
-        (*addr_of_mut!(UART)).set_stop_bits(stop_bits);
-    }
-}
-
 /// Configures the UART hardware registers for operation
 ///
-/// This function performs the hardware specific setup sequence for the PL011 UART, including
-/// setting the baud rate, data format and enabling interrupts
+/// This function performs the hardware specific setup sequence for the PL011 UART, including setting the baud rate,
+/// data format and enabling interrupts
 #[unsafe(no_mangle)]
 pub fn configure_uart() {
     unsafe {
@@ -350,6 +317,10 @@ pub fn putchar(c: u8) {
 }
 
 /// Reads a single byte from the interrupt-driven RX buffer
+///
+/// # Returns
+///
+/// `Some(byte)` if a byte was available, `None` if the RX buffer is currently empty.
 pub fn getchar() -> Option<u8> {
     return RX_BUFFER.lock_irqsafe(|rx| rx.pop());
 }
@@ -392,6 +363,10 @@ pub fn _print(args: core::fmt::Arguments) {
     UartWriter.write_fmt(args).unwrap();
 }
 
+/// Formats and writes to the UART, without a trailing newline
+///
+/// This crate's own `print!`, not `std`'s — a `#![no_std]` kernel has no standard library to import it from. Same
+/// argument syntax as the familiar macro; routes through [`_print`] to the PL011 driver.
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
@@ -399,6 +374,9 @@ macro_rules! print {
     };
 }
 
+/// Formats and writes to the UART, with a trailing newline
+///
+/// This crate's own `println!` — see [`print!`] for why one is needed at all in `#![no_std]`.
 #[macro_export]
 macro_rules! println {
     () => { $crate::print!("\n") };
@@ -455,7 +433,7 @@ pub fn setup(dev: &device::PlatformDevice) {
                     gicv3::set_spi_trigger_level(spi_id);
                 }
                 gicv3::set_spi_priority(spi_id, 0x00);
-                gicv3::set_spi_group(spi_id);
+                gicv3::set_spi_group1(spi_id);
                 gicv3::set_spi_routing(spi_id, 0); // Route to core 0
                 gicv3::enable_spi(spi_id);
             }

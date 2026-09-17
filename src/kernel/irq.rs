@@ -1,4 +1,9 @@
 //! Exception handling module
+//!
+//! Handles synchronous exceptions, IRQs, FIQs, and SErrors taken at EL1. Assembly entry code (`src/asm/vectors.S`)
+//! saves register state to the stack and calls into the matching handler here by name —
+//! `do_sync`/`do_irq`/`do_fiq`/`do_serror` for the current-EL vectors this kernel actually expects, `do_bad_*` for
+//! exceptions taken from an unexpected EL, which just dump diagnostics and panic.
 
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
@@ -103,9 +108,8 @@ impl Regs {
 
 /// Prints the faulting instruction at the exception address
 ///
-/// Reads and displays the 32-bit instruction at the address stored in the
-/// Exception Link Register (ELR), which points to the instruction that
-/// caused the exception.
+/// Reads and displays the 32-bit instruction at the address stored in the Exception Link Register (ELR), which points
+/// to the instruction that caused the exception.
 fn print_faulting_instr(elr: u64) {
     let addr = (elr & !3) as *const u32;
     let opcode: u32;
@@ -137,9 +141,8 @@ fn print_regs(regs: &Regs) {
 
 /// Handles synchronous exceptions from an unexpected exception level
 ///
-/// This "bad mode" handler is called when a synchronous exception occurs
-/// from an exception level that should not normally generate exceptions.
-/// It prints diagnostic information and panics.
+/// This "bad mode" handler is called when a synchronous exception occurs from an exception level that should not
+/// normally generate exceptions. It prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_sync(regs: &Regs) -> ! {
     println!("Bad mode in Synchronous Exception handler");
@@ -150,9 +153,8 @@ pub extern "C" fn do_bad_sync(regs: &Regs) -> ! {
 
 /// Handles IRQ (Interrupt Request) from an unexpected exception level
 ///
-/// This "bad mode" handler is called when an IRQ occurs from an exception
-/// level that should not normally generate interrupts. It prints diagnostic
-/// information and panics.
+/// This "bad mode" handler is called when an IRQ occurs from an exception level that should not normally generate
+/// interrupts. It prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_irq(regs: &Regs) -> ! {
     println!("Bad mode in IRQ handler");
@@ -163,9 +165,8 @@ pub extern "C" fn do_bad_irq(regs: &Regs) -> ! {
 
 /// Handles FIQ (Fast Interrupt Request) from an unexpected exception level
 ///
-/// This "bad mode" handler is called when an FIQ occurs from an exception
-/// level that should not normally generate fast interrupts. It prints
-/// diagnostic information and panics.
+/// This "bad mode" handler is called when an FIQ occurs from an exception level that should not normally generate fast
+/// interrupts. It prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_fiq(regs: &Regs) -> ! {
     println!("Bad mode in FIQ handler");
@@ -176,9 +177,8 @@ pub extern "C" fn do_bad_fiq(regs: &Regs) -> ! {
 
 /// Handles SError (System Error) from an unexpected exception level
 ///
-/// This "bad mode" handler is called when a system error occurs from an
-/// exception level that should not normally generate SErrors. It prints
-/// diagnostic information and panics.
+/// This "bad mode" handler is called when a system error occurs from an exception level that should not normally
+/// generate SErrors. It prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_bad_serror(regs: &Regs) -> ! {
     println!("Bad mode in SError handler");
@@ -187,7 +187,18 @@ pub extern "C" fn do_bad_serror(regs: &Regs) -> ! {
     panic!();
 }
 
-/// Synchronous exception handler
+/// Synchronous exception handler for SVC (syscall) instructions
+///
+/// Currently a stub: prints the requested syscall number and always returns 0. No syscalls are implemented yet.
+///
+/// # Arguments
+///
+/// * `nr` - the syscall number requested (from `x8` at the `svc` instruction, extracted by `sync_handler` in
+///   `vectors.S` before this is called)
+///
+/// # Returns
+///
+/// The syscall's return value, placed back into `x0` for the caller — currently always 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_sync(nr: u32) -> u64 {
     println!("Requested syscall: {}", nr);
@@ -195,6 +206,18 @@ pub extern "C" fn do_sync(nr: u32) -> u64 {
 }
 
 /// IRQ handler
+///
+/// Dispatches by interrupt ID: rearms the timer on a timer interrupt, drains the UART RX FIFO on a UART interrupt,
+/// otherwise just logs it.
+///
+/// # Arguments
+///
+/// * `id` - the interrupt ID read from `ICC_IAR1_EL1` by `irq_handler` in `vectors.S`
+///
+/// # Returns
+///
+/// The same `id`, unchanged — the caller writes it back to `ICC_EOIR1_EL1` to acknowledge the interrupt, which is why
+/// this returns the ID rather than `()`.
 #[unsafe(no_mangle)]
 pub fn do_irq(id: u32) -> u32 {
     match id {
@@ -210,10 +233,15 @@ pub fn do_irq(id: u32) -> u32 {
             println!("Unhandled IRQ: {}", id);
         }
     }
-    return id; // return the interrupt ID so we can acknowledge it by writting to ICC_EOIR1_EL1
+    return id;
 }
 
 /// Handler for unimplemented synchronous exceptions
+///
+/// # Arguments
+///
+/// * `exception_class` - the ESR_EL1.EC field (bits \[31:26\]), identifying why the exception was taken; decoded below
+///   into a human-readable reason and printed
 #[unsafe(no_mangle)]
 pub extern "C" fn unimplemented_sync(exception_class: u32) {
     let kind;
@@ -268,8 +296,8 @@ pub extern "C" fn unimplemented_sync(exception_class: u32) {
 
 /// Handles FIQ (Fast Interrupt Request) from the current exception level
 ///
-/// Called when a fast interrupt request is received. Prints diagnostic
-/// information and panics (as FIQ handling is not yet implemented).
+/// Called when a fast interrupt request is received. Prints diagnostic information and panics (as FIQ handling is not
+/// yet implemented).
 #[unsafe(no_mangle)]
 pub extern "C" fn do_fiq(regs: &Regs) -> ! {
     println!("FIQ handler");
@@ -280,8 +308,7 @@ pub extern "C" fn do_fiq(regs: &Regs) -> ! {
 
 /// Handles SError (System Error) from the current exception level
 ///
-/// Called when a system error occurs (e.g., asynchronous external abort).
-/// Prints diagnostic information and panics.
+/// Called when a system error occurs (e.g., asynchronous external abort). Prints diagnostic information and panics.
 #[unsafe(no_mangle)]
 pub extern "C" fn do_serror(regs: &Regs) -> ! {
     println!("SError handler");

@@ -1,12 +1,11 @@
 //! GICv3 interrupt controller driver
 //!
-//! This module provides functions to initialize and configure the ARM GICv3 interrupt controller.
-//! It manages both the Distributor (GICD) for Shared Peripheral Interrupts (SPIs) and the
-//! Redistributor (GICR) for Private Peripheral Interrupts (PPIs) and Software Generated
-//! Interrupts (SGIs).
+//! This module provides functions to initialize and configure the ARM GICv3 interrupt controller. It manages both the
+//! Distributor (GICD) for Shared Peripheral Interrupts (SPIs) and the Redistributor (GICR) for Private Peripheral
+//! Interrupts (PPIs) and Software Generated Interrupts (SGIs).
 //!
-//! The driver uses a global `Gicv3` instance accessed through public wrapper functions.
-//! Base addresses are discovered from the device tree during boot.
+//! The driver uses a global `Gicv3` instance accessed through public wrapper functions. Base addresses are discovered
+//! from the device tree during boot.
 
 use core::arch::asm;
 use core::ptr::addr_of_mut;
@@ -18,8 +17,8 @@ use crate::utilities::mmio;
 
 /// Maximum number of cells in a GIC interrupt specifier
 ///
-/// The GICv3 binding requires `#interrupt-cells` to be at least 4
-/// (see `Documentation/devicetree/bindings/interrupt-controller/arm,gic-v3.yaml`).
+/// The GICv3 binding requires `#interrupt-cells` to be at least 4 (see the Linux kernel's
+/// `Documentation/devicetree/bindings/interrupt-controller/arm,gic-v3.yaml`).
 pub const MAX_INTERRUPT_CELLS: usize = 4;
 
 /// Priority mask that lets every interrupt through (0xFF is the lowest threshold)
@@ -111,8 +110,8 @@ static mut GIC: Gicv3 = Gicv3::new();
 
 /// GICv3 interrupt controller state
 ///
-/// Holds the MMIO base addresses for the GIC Distributor (GICD) and Redistributor (GICR)
-/// regions. These are populated during device tree parsing and used by all GIC operations.
+/// Holds the MMIO base addresses for the GIC Distributor (GICD) and Redistributor (GICR) regions. These are populated
+/// during device tree parsing and used by all GIC operations.
 struct Gicv3 {
     /// Base address of the GIC Distributor (GICD) registers
     dist_addr: usize,
@@ -146,9 +145,12 @@ impl Gicv3 {
         }
     }
 
-    /// Sets the priority for the given PPI/SGI
+    /// Sets the priority of a PPI/SGI in the redistributor
     ///
-    /// Sets the priority `prio` to the given PPI/SGI `id`
+    /// # Arguments
+    ///
+    /// * `id` - PPI/SGI interrupt id (0-31)
+    /// * `prio` - priority value; lower numbers are higher priority
     pub fn set_ppi_priority(&self, id: u32, prio: u8) {
         unsafe {
             let sgi_base = self.redist_addr + gicr::SGI_BASE;
@@ -166,19 +168,20 @@ impl Gicv3 {
         }
     }
 
-    /// Assigns the PPI/SGI to Group 1
-    ///
-    /// Assigns the PPI/SGI `id` to Group 1
-    pub fn set_ppi_group(&self, id: u32) {
+    /// Assigns the PPI/SGI `id` (0-31) to Group 1
+    pub fn set_ppi_group1(&self, id: u32) {
         unsafe {
             mmio::set_mmio_bits32(self.redist_addr + gicr::SGI_BASE, gicr::IGROUPR0, 1 << id);
             asm!("dsb sy", options(nostack));
         }
     }
 
-    /// Enables the PPI/SGI
+    /// Enables the PPI/SGI with the given `id` (0-31)
     ///
-    /// Enables the PPI/SGI with the given `id`
+    /// PPI (Private Peripheral Interrupt) and SGI (Software Generated Interrupt) share the redistributor's 0-31 ID
+    /// range: PPIs are per-core hardware interrupts (e.g. the local timer), SGIs are software-triggered
+    /// (inter-processor interrupts). Both go through the same redistributor registers, so this driver doesn't
+    /// distinguish between them.
     pub fn enable_ppi(&self, id: u32) {
         unsafe {
             mmio::set_mmio_bits32(self.redist_addr + gicr::SGI_BASE, gicr::ISENABLER0, 1 << id);
@@ -186,9 +189,12 @@ impl Gicv3 {
         }
     }
 
-    /// Sets the priority of interrupts
+    /// Sets the priority of an SPI in the distributor
     ///
-    /// Sets the priority `prio` to the interrupt `id`
+    /// # Arguments
+    ///
+    /// * `id` - SPI interrupt id (32+)
+    /// * `prio` - priority value; lower numbers are higher priority
     pub fn set_spi_priority(&self, id: u32, prio: u8) {
         unsafe {
             let reg_index = id / layout::PRIORITY_PER_REG;
@@ -205,9 +211,7 @@ impl Gicv3 {
         }
     }
 
-    /// Sets level-sensitive trigger mode for the SPI
-    ///
-    /// Configures the interrupt `id` to be level-sensitive (0b00 in ICFGR)
+    /// Configures the SPI `id` (32+) to be level-sensitive (0b00 in ICFGR)
     pub fn set_spi_trigger_level(&self, id: u32) {
         unsafe {
             let reg_index = id / layout::CONFIG_PER_REG;
@@ -224,9 +228,7 @@ impl Gicv3 {
         }
     }
 
-    /// Sets edge-triggered mode for the SPI
-    ///
-    /// Configures the interrupt `id` to be edge-triggered (0b10 in ICFGR)
+    /// Configures the SPI `id` (32+) to be edge-triggered (0b10 in ICFGR)
     pub fn set_spi_trigger_edge(&self, id: u32) {
         unsafe {
             let reg_index = id / layout::CONFIG_PER_REG;
@@ -243,9 +245,11 @@ impl Gicv3 {
         }
     }
 
-    /// Enables forwarding of the interrupt to the CPU interface
+    /// Enables forwarding of SPI `id` (32+) in the GIC distributor
     ///
-    /// Enables forwarding of the interrupt `id` in the GIC distributor
+    /// SPI (Shared Peripheral Interrupt) is a hardware interrupt from a device (e.g. this kernel's UART) — routed
+    /// through the distributor and, with affinity routing, deliverable to any core. Distinct from a PPI, which is
+    /// private to one core.
     pub fn enable_spi(&self, id: u32) {
         unsafe {
             let reg_index = id / layout::ENABLE_PER_REG;
@@ -258,10 +262,13 @@ impl Gicv3 {
         }
     }
 
-    /// Provides routing information for the SPI
+    /// Sets the routing target for an SPI, when affinity routing is enabled
     ///
-    /// When affinity routing is enabled, provides routing information for the SPI with id `id`. It
-    /// defines the routing mode by writting the value `core_affinity` into the corresponding register
+    /// # Arguments
+    ///
+    /// * `id` - SPI interrupt id (32+)
+    /// * `core_affinity` - target core, encoded as an `ICC_SGI1R_EL1`-style affinity value, written directly into the
+    ///   SPI's `IROUTER` register
     pub fn set_spi_routing(&self, id: u32, core_affinity: u64) {
         unsafe {
             let router_reg_addr =
@@ -273,10 +280,8 @@ impl Gicv3 {
         }
     }
 
-    /// Assigns the SPI to the Group 1
-    ///
-    /// Assigns the SPI `id` to the Group 1
-    pub fn set_spi_group(&self, id: u32) {
+    /// Assigns the SPI `id` (32+) to Group 1
+    pub fn set_spi_group1(&self, id: u32) {
         unsafe {
             let reg_index = id / layout::ENABLE_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
@@ -288,9 +293,7 @@ impl Gicv3 {
         }
     }
 
-    /// Sets level-sensitive trigger mode for the PPI
-    ///
-    /// Configures the interrupt `id` to be level-sensitive (0b00 in ICFGR)
+    /// Configures the PPI `id` (0-31) to be level-sensitive (0b00 in ICFGR)
     pub fn set_ppi_trigger_level(&self, id: u32) {
         unsafe {
             let reg_index = id / layout::CONFIG_PER_REG;
@@ -308,9 +311,7 @@ impl Gicv3 {
         }
     }
 
-    /// Sets edge-triggered mode for the PPI
-    ///
-    /// Configures the interrupt `id` to be edge-triggered (0b10 in ICFGR)
+    /// Configures the PPI `id` (0-31) to be edge-triggered (0b10 in ICFGR)
     pub fn set_ppi_trigger_edge(&self, id: u32) {
         unsafe {
             let reg_index = id / layout::CONFIG_PER_REG;
@@ -331,12 +332,11 @@ impl Gicv3 {
 
 /// Initializes the GIC with the given distributor and redistributor addresses
 ///
-/// Stores the base addresses and initializes both the distributor (enables Group 1
-/// interrupts — single-Security-state view, see `gicd_ctlr`) and redistributor (wakes the
-/// PE from sleep).
+/// Stores the base addresses and initializes both the distributor (enables Group 1 interrupts — single-Security-state
+/// view, see `gicd_ctlr`) and redistributor (wakes the PE from sleep).
 ///
-/// Affinity routing is not enabled here: GICD_CTLR.ARE is RAO/WI when GICv2 backwards
-/// compatibility is absent, so it is already in effect and IROUTER writes take effect.
+/// Affinity routing is not enabled here: GICD_CTLR.ARE is RAO/WI when GICv2 backwards compatibility is absent, so it is
+/// already in effect and IROUTER writes take effect.
 fn init_gic(dist_addr: usize, redist_addr: usize) {
     unsafe {
         (*addr_of_mut!(GIC)).dist_addr = dist_addr;
@@ -348,42 +348,56 @@ fn init_gic(dist_addr: usize, redist_addr: usize) {
 
 // Public wrapper functions for SPI (distributor) access
 
-/// Enables forwarding of the SPI `id` in the GIC distributor
+/// Enables forwarding of the SPI `id` (32+) in the GIC distributor
+///
+/// SPI (Shared Peripheral Interrupt) is a hardware interrupt from a device (e.g. this kernel's UART) — routed through
+/// the distributor and, with affinity routing, deliverable to any core. Distinct from a PPI, which is private to one
+/// core.
 pub fn enable_spi(id: u32) {
     unsafe {
         (*addr_of_mut!(GIC)).enable_spi(id);
     }
 }
 
-/// Sets the priority of SPI `id` in the distributor
+/// Sets the priority of an SPI in the distributor
+///
+/// # Arguments
+///
+/// * `id` - SPI interrupt id (32+)
+/// * `prio` - priority value; lower numbers are higher priority
 pub fn set_spi_priority(id: u32, prio: u8) {
     unsafe {
         (*addr_of_mut!(GIC)).set_spi_priority(id, prio);
     }
 }
 
-/// Sets level-sensitive trigger mode for SPI `id`
+/// Sets level-sensitive trigger mode for SPI `id` (32+)
 pub fn set_spi_trigger_level(id: u32) {
     unsafe {
         (*addr_of_mut!(GIC)).set_spi_trigger_level(id);
     }
 }
 
-/// Sets edge-triggered mode for SPI `id`
+/// Sets edge-triggered mode for SPI `id` (32+)
 pub fn set_spi_trigger_edge(id: u32) {
     unsafe {
         (*addr_of_mut!(GIC)).set_spi_trigger_edge(id);
     }
 }
 
-/// Assigns SPI `id` to Group 1
-pub fn set_spi_group(id: u32) {
+/// Assigns SPI `id` (32+) to Group 1
+pub fn set_spi_group1(id: u32) {
     unsafe {
-        (*addr_of_mut!(GIC)).set_spi_group(id);
+        (*addr_of_mut!(GIC)).set_spi_group1(id);
     }
 }
 
-/// Sets the affinity routing for SPI `id`
+/// Sets the routing target for an SPI, when affinity routing is enabled
+///
+/// # Arguments
+///
+/// * `id` - SPI interrupt id (32+)
+/// * `core_affinity` - target core, encoded as an `ICC_SGI1R_EL1`-style affinity value
 pub fn set_spi_routing(id: u32, core_affinity: u64) {
     unsafe {
         (*addr_of_mut!(GIC)).set_spi_routing(id, core_affinity);
@@ -392,44 +406,56 @@ pub fn set_spi_routing(id: u32, core_affinity: u64) {
 
 // Public wrapper functions for PPI/SGI (redistributor)
 
-/// Sets the priority of PPI/SGI `id` in the redistributor
+/// Sets the priority of a PPI/SGI in the redistributor
+///
+/// # Arguments
+///
+/// * `id` - PPI/SGI interrupt id (0-31)
+/// * `prio` - priority value; lower numbers are higher priority
 pub fn set_ppi_priority(id: u32, prio: u8) {
     unsafe {
         (*addr_of_mut!(GIC)).set_ppi_priority(id, prio);
     }
 }
 
-/// Assigns PPI/SGI `id` to Group 1 in the redistributor
-pub fn set_ppi_group(id: u32) {
+/// Assigns PPI/SGI `id` (0-31) to Group 1 in the redistributor
+pub fn set_ppi_group1(id: u32) {
     unsafe {
-        (*addr_of_mut!(GIC)).set_ppi_group(id);
+        (*addr_of_mut!(GIC)).set_ppi_group1(id);
     }
 }
 
-/// Enables PPI/SGI `id` in the redistributor
+/// Enables PPI/SGI `id` (0-31) in the redistributor
+///
+/// PPI (Private Peripheral Interrupt) and SGI (Software Generated Interrupt) share this 0-31 ID range: PPIs are
+/// per-core hardware interrupts (e.g. the local timer), SGIs are software-triggered (inter-processor interrupts). Both
+/// go through the same redistributor registers, so this driver doesn't distinguish between them.
 pub fn enable_ppi(id: u32) {
     unsafe {
         (*addr_of_mut!(GIC)).enable_ppi(id);
     }
 }
 
-/// Sets level-sensitive trigger mode for PPI `id`
+/// Sets level-sensitive trigger mode for PPI `id` (0-31)
 pub fn set_ppi_trigger_level(id: u32) {
     unsafe {
         (*addr_of_mut!(GIC)).set_ppi_trigger_level(id);
     }
 }
 
-/// Sets edge-triggered mode for PPI `id`
+/// Sets edge-triggered mode for PPI `id` (0-31)
 pub fn set_ppi_trigger_edge(id: u32) {
     unsafe {
         (*addr_of_mut!(GIC)).set_ppi_trigger_edge(id);
     }
 }
 
-/// Sets an interrupt mask
+/// Sets the interrupt priority mask (ICC_PMR_EL1)
 ///
-/// Sets the interrupt mask `priority`. Interrupts with a higher priority than `priority` will be signaled to the PE
+/// # Arguments
+///
+/// * `priority` - priority threshold; only interrupts with a higher priority (a numerically lower value) than this are
+///   signaled to the PE
 #[inline(always)]
 pub fn set_priority_mask(priority: u8) {
     unsafe {
@@ -438,6 +464,11 @@ pub fn set_priority_mask(priority: u8) {
 }
 
 /// Enable the Group 1 interrupts
+///
+/// GICv3 partitions interrupts into Group 0 (traditionally routed to FIQ, secure-world use) and Group 1 (routed to IRQ
+/// — what this kernel's timer and UART interrupts use, assigned via `set_spi_group1`/`set_ppi_group1`). This gates them
+/// at the CPU interface (ICC_IGRPEN1_EL1); the distributor-side Group 1 enable is set separately in
+/// `init_gic_distributor`.
 #[inline(always)]
 pub fn enable_grp1_ints() {
     unsafe {
@@ -455,9 +486,8 @@ pub fn enable_grp1_ints() {
 
 /// Sets up the GICv3 from device tree properties
 ///
-/// Parses the `reg` property to extract the distributor (GICD) and redistributor (GICR)
-/// base addresses, initializes the GIC hardware, sets the CPU interface priority mask
-/// to accept all priorities, and enables Group 1 interrupts.
+/// Parses the `reg` property to extract the distributor (GICD) and redistributor (GICR) base addresses, initializes the
+/// GIC hardware, sets the CPU interface priority mask to accept all priorities, and enables Group 1 interrupts.
 pub fn setup(dev: &device::PlatformDevice) {
     let mut gicd_addr: usize = 0;
     let mut gicr_addr: usize = 0;

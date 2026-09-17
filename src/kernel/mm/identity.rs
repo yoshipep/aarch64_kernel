@@ -1,3 +1,9 @@
+//! Identity mapping and MMU bring-up
+//!
+//! Builds a temporary identity map (VA = PA) covering the kernel image and MMIO, then enables the MMU. The kernel is
+//! linked at a physical address, so keeping VA == PA lets execution continue unchanged across the MMU-enable transition
+//! — no relocation needed yet. This map is torn down later once a proper high-half kernel mapping takes over.
+
 use core::arch::asm;
 use core::ptr::addr_of_mut;
 
@@ -14,6 +20,12 @@ unsafe extern "C" {
     static mut __idmap_l1: u8;
 }
 
+/// Builds the identity page tables and enables the MMU
+///
+/// Maps the first 2 GiB of physical address space 1:1 (VA = PA) using two 1 GiB block descriptors: `[0, 1 GiB)` as
+/// Device-nGnRnE (covers the GIC/UART MMIO ranges) and `[1 GiB, 2 GiB)` as Normal write-back cacheable (covers the
+/// kernel image and stack, linked at `0x50000000`). Assumes the kernel and all MMIO used before this call fit within
+/// that layout — see `L1_SIZE_PER_ENTRY`.
 pub fn setup_identity_mapping() {
     // As kernel is mapped at 0x50000000, and MMIO is at 0x8000000-0x90000000, we use L0 and L1
     // descriptors, so we cover the entire space by using huge pages
@@ -82,6 +94,7 @@ pub fn setup_identity_mapping() {
     enable_mmu();
 }
 
+/// Writes the Translation Control Register (TCR_EL1)
 #[inline(always)]
 fn configure_tcr(tcr: u64) {
     unsafe {
@@ -94,6 +107,7 @@ fn configure_tcr(tcr: u64) {
     }
 }
 
+/// Configures TCR_EL1 for the identity map, then sets SCTLR_EL1.M to turn the MMU on
 #[inline(always)]
 fn enable_mmu() {
     configure_tcr(
@@ -120,6 +134,7 @@ fn enable_mmu() {
     }
 }
 
+/// Loads TTBR0_EL1 with the given page-table base address and invalidates stale TLB entries
 #[inline(always)]
 fn load_ttbr0(base: u64) {
     unsafe {

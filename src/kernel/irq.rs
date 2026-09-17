@@ -6,25 +6,33 @@ use crate::{print, println};
 
 /// CPU register state at the time of an exception
 ///
-/// This struct captures all general-purpose registers (x0-x30) and special
-/// system registers when an exception occurs. The layout matches the order
-/// in which registers are saved by the exception entry code.
+/// This struct is a typed view over raw stack memory — it is never constructed in Rust, only read through a `&Regs`
+/// reference handed in from assembly (`x0` at the call to `do_bad_sync` etc., set by `save_regs` in
+/// `vectors.S`/`macro.h`'s `save_gpr_regs_on_exc`). Reordering this struct without updating the assembly (or vice
+/// versa) silently reads the wrong register.
+///
+/// `x29`/`x30` are pushed by each vector entry in `vectors.S` itself — immediately before `bl save_regs` — not by
+/// `save_regs`. Every one of the 8 vectors follows that same `stp x29, x30, [sp, #-16]!` then `bl save_regs` pattern
+/// with nothing in between, which is what makes their position here reliable despite living outside `save_regs`'s own
+/// pushes.
 ///
 /// # Fields
 ///
-/// - `x0-x30`: General-purpose registers
-/// - `esr`: Exception Syndrome Register - describes the exception cause
 /// - `elr`: Exception Link Register - return address
 /// - `spsr`: Saved Program Status Register - saved processor state
-/// - `xzr`: Zero register placeholder
+/// - `esr`: Exception Syndrome Register - describes the exception cause
+/// - `_xzr1`, `_xzr2`: architectural zero-register padding — `stp` needs a register pair, and `esr`/`x0` have no
+///   natural odd-numbered partner, so the zero register fills the slot. Always reads as 0; not real saved data.
+/// - `x0-x30`: General-purpose registers
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Regs {
-    spsr: u64,
     elr: u64,
+    spsr: u64,
     esr: u64,
-    xzr: u64,
+    _xzr1: u64,
     x0: u64,
+    _xzr2: u64,
     x1: u64,
     x2: u64,
     x3: u64,

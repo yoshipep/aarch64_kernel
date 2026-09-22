@@ -76,14 +76,16 @@ COMBINED_BLOB := combined.bin
 #==============================================================================
 # QEMU CONFIGURATION
 #==============================================================================
+QEMU_MEM := 1G
+
 ifeq ($(BOOTLOADER_EXISTS),yes)
 	# Boot with bootloader if present
 	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-				-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE) -m 1G
+				-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE) -m $(QEMU_MEM)
 else
 	# Boot kernel directly if no bootloader
 	QEMU_FLAGS = -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-				-kernel $(KERNEL_ELF) -dtb $(DTB_FILE) -m 1G
+				-kernel $(KERNEL_ELF) -dtb $(DTB_FILE) -m $(QEMU_MEM)
 endif
 
 #==============================================================================
@@ -156,14 +158,14 @@ blob: $(COMBINED_BLOB)
 run-blob: $(COMBINED_BLOB) $(DTB_FILE)
 	@echo "Running combined blob (bootloader will load kernel)..."
 	$(QEMU) -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -serial stdio \
-			-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE) -m 1G
+			-kernel $(COMBINED_BLOB) -dtb $(DTB_FILE) -m $(QEMU_MEM)
 endif
 
 #------------------------------------------------------------------------------
 # COMMON BUILD RULES
 #------------------------------------------------------------------------------
 $(DTB_FILE):
-	$(QEMU) -machine virt,gic-version=3,dumpdtb=$@ -cpu cortex-a57
+	$(QEMU) -machine virt,gic-version=3,dumpdtb=$@ -cpu cortex-a57 -m $(QEMU_MEM)
 
 # Run with bootloader
 run: all
@@ -183,7 +185,7 @@ $(BUILD_DIR)/%.S.o: %.S
 # Run kernel directly (for testing without bootloader)
 run-kernel: $(KERNEL_ELF) $(DTB_FILE)
 	$(QEMU) -machine virt,gic-version=3 -cpu cortex-a57 -serial stdio \
-			-kernel $(KERNEL_ELF) -dtb $(DTB_FILE)
+			-kernel $(KERNEL_ELF) -dtb $(DTB_FILE) -m $(QEMU_MEM)
 
 doc:
 	cargo doc --target $(TARGET) --no-deps --document-private-items --target-dir $(DOC_DIR)

@@ -90,6 +90,7 @@ pub fn setup_identity_mapping() {
 
         load_ttbr0(idmap_pgd_ptr as u64);
     }
+
     // We can now safely enable MMU
     enable_mmu();
 }

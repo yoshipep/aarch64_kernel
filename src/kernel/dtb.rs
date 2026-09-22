@@ -20,6 +20,7 @@
 use core;
 
 use crate::kernel::device;
+use crate::kernel::phys_addr::PhysAddr;
 use crate::utilities::convert;
 
 /// DTB magic number (big-endian: 0xd00dfeed)
@@ -141,7 +142,8 @@ fn get_property_name(dtb_addr: usize, off_dt_strings: usize, offset: u32) -> &'s
 ///
 /// * `dtb` - physical address of the Flattened Device Tree blob
 #[unsafe(no_mangle)]
-pub fn parse_dtb(dtb: usize) {
+pub fn parse_dtb(dtb: PhysAddr) {
+    let dtb = dtb.as_usize();
     let header = FdtHeader::from_be_bytes(dtb);
     if header.magic != MAGIC {
         panic!();
@@ -316,22 +318,35 @@ fn compatible_matches(prop: &device::Property, target: &str) -> bool {
     false
 }
 
+/// Checks whether `dev` satisfies the given match criteria.
+///
+/// Looks up whichever property the criteria names (`compatible` or `device_type`) and delegates to
+/// `compatible_matches`, which handles both `compatible`'s null-separated multi-value aliases and a plain
+/// single-value property like `device_type` equally correctly.
+fn node_matches(dev: &device::PlatformDevice, criteria: device::MatchCriteria) -> bool {
+    let (prop_name, target) = match criteria {
+        device::MatchCriteria::Compatible(target) => ("compatible", target),
+        device::MatchCriteria::DeviceType(target) => ("device_type", target),
+    };
+    dev.find_property(prop_name)
+        .is_some_and(|prop| compatible_matches(prop, target))
+}
+
 /// Initializes all discovered devices by matching against the driver table
 ///
-/// Runs in two passes: 1. First initializes the GIC (interrupt controller), since other devices depend on it to
-/// configure their interrupts 2. Then initializes all remaining devices (UART, timer, etc.)
+/// Runs in two passes:
+/// 1. First initializes the GIC (interrupt controller), since other devices depend on it to configure their interrupts
+/// 2. Then initializes all remaining devices (UART, timer, memory, etc.)
 pub fn init_devices() {
     unsafe {
         // First pass: initialize GIC (interrupt controller must be ready before other devices)
         for i in 0..DEVICE_COUNT {
             let dev = &DEVICE_TABLE[i];
-            if let Some(compat_prop) = dev.find_property("compatible") {
-                if compatible_matches(compat_prop, "arm,gic-v3") {
-                    for match_entry in &device::CONFIGURED_DEVICES {
-                        if compatible_matches(compat_prop, match_entry.compatible) {
-                            (match_entry.setup_fn)(dev);
-                            break;
-                        }
+            if node_matches(dev, device::MatchCriteria::Compatible("arm,gic-v3")) {
+                for match_entry in &device::CONFIGURED_DEVICES {
+                    if node_matches(dev, match_entry.criteria) {
+                        (match_entry.setup_fn)(dev);
+                        break;
                     }
                 }
             }
@@ -340,16 +355,20 @@ pub fn init_devices() {
         // Second pass: initialize all other devices
         for i in 0..DEVICE_COUNT {
             let dev = &DEVICE_TABLE[i];
-            if let Some(compat_prop) = dev.find_property("compatible") {
-                if !compatible_matches(compat_prop, "arm,gic-v3") {
-                    for match_entry in &device::CONFIGURED_DEVICES {
-                        if compatible_matches(compat_prop, match_entry.compatible) {
-                            (match_entry.setup_fn)(dev);
-                            break;
-                        }
+            if !node_matches(dev, device::MatchCriteria::Compatible("arm,gic-v3")) {
+                for match_entry in &device::CONFIGURED_DEVICES {
+                    if node_matches(dev, match_entry.criteria) {
+                        (match_entry.setup_fn)(dev);
+                        break;
                     }
                 }
             }
         }
     }
+}
+
+/// Returns the total size in bytes of the DTB blob at `dtb_addr`, read from its own FDT header.
+pub fn dtb_size(dtb_addr: PhysAddr) -> usize {
+    let header = FdtHeader::from_be_bytes(dtb_addr.as_usize());
+    header.totalsize as usize
 }

@@ -2,7 +2,8 @@
 //!
 //! This module provides structures for representing devices discovered from the Device Tree Blob.
 //! The design uses a combined match table approach where each entry contains both the matching
-//! criteria (`compatible` string) and the setup function pointer.
+//! criteria (a `compatible` string, or a `device_type` string for the `cpu`/`memory` nodes that
+//! have no `compatible` property) and the setup function pointer.
 //!
 //! # Linux Kernel Comparison
 //!
@@ -17,12 +18,13 @@
 //!
 //! 1. Define a static match table with `DeviceMatch` entries
 //! 2. During DTB parsing, collect properties into `PlatformDevice`
-//! 3. Check `compatible` property against match table
+//! 3. Check the property named by each entry's `MatchCriteria` against the match table
 //! 4. If matched, call the corresponding `setup_fn`
 
 use crate::drivers::gic::gicv3;
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
+use crate::kernel::meminfo;
 use crate::utilities::convert;
 
 /// Maximum number of properties per device node.
@@ -135,30 +137,48 @@ impl Default for PlatformDevice {
     }
 }
 
+/// Property a `DeviceMatch` entry is matched against.
+///
+/// `Compatible` is the devicetree spec's primary driver-matching mechanism and covers virtually every real device.
+/// `DeviceType` exists only for node types the spec doesn't give a `compatible` property at all — as of the spec, that
+/// means `cpu` and `memory` nodes exclusively.
+#[derive(Clone, Copy)]
+pub enum MatchCriteria {
+    /// Match against the node's `compatible` property (possibly one of several null-separated aliases).
+    Compatible(&'static str),
+    /// Match against the node's `device_type` property. Only meaningful for `cpu`/`memory` nodes.
+    DeviceType(&'static str),
+}
+
 /// Entry in the device match table.
 ///
 /// Combines matching criteria with setup function (unlike Linux which separates `of_device_id`
-/// and `platform_driver`). During DTB parsing, the `compatible` property is checked against
-/// each entry; on match, `setup_fn` is called with the collected device properties.
+/// and `platform_driver`). During DTB parsing, each entry's `criteria` is checked against the
+/// matching property of every discovered node; on match, `setup_fn` is called with the collected
+/// device properties.
 pub struct DeviceMatch {
-    /// Compatible string to match (e.g., "arm,pl011", "arm,gic-v3")
-    pub compatible: &'static str,
+    /// What property, and value, identifies a matching node.
+    pub criteria: MatchCriteria,
     /// Function to call when a matching device is found
     pub setup_fn: fn(&PlatformDevice),
 }
 
-/// Table of supported devices, matched against DTB `compatible` strings during initialization
-pub static CONFIGURED_DEVICES: [DeviceMatch; 3] = [
+/// Table of supported devices, matched against DTB nodes during initialization
+pub static CONFIGURED_DEVICES: [DeviceMatch; 4] = [
     DeviceMatch {
-        compatible: "arm,gic-v3",
+        criteria: MatchCriteria::Compatible("arm,gic-v3"),
         setup_fn: gicv3::setup,
     },
     DeviceMatch {
-        compatible: "arm,pl011",
+        criteria: MatchCriteria::Compatible("arm,pl011"),
         setup_fn: pl011::setup,
     },
     DeviceMatch {
-        compatible: "arm,armv7-timer",
+        criteria: MatchCriteria::Compatible("arm,armv7-timer"),
         setup_fn: arch_timer::setup,
+    },
+    DeviceMatch {
+        criteria: MatchCriteria::DeviceType("memory"),
+        setup_fn: meminfo::setup,
     },
 ];

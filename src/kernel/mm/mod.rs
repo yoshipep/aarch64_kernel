@@ -1,5 +1,6 @@
 //! Virtual memory management: page tables, MAIR configuration, identity mapping
 
+pub mod frame_alloc;
 pub mod identity;
 pub mod mair;
 pub mod pgtable;

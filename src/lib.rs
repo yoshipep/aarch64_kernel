@@ -7,7 +7,9 @@
 
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
-use crate::kernel::{dtb, mm};
+use crate::kernel::mm::frame_alloc;
+use crate::kernel::phys_addr::PhysAddr;
+use crate::kernel::{dtb, meminfo, mm};
 use core::panic::PanicInfo;
 
 // Public modules
@@ -24,10 +26,20 @@ pub mod utilities;
 /// # Arguments
 /// * `dtb_addr` - Physical address of the Flattened Device Tree blob, provided by the bootloader
 #[unsafe(no_mangle)]
-pub extern "C" fn kmain(dtb_addr: usize) {
+pub extern "C" fn kmain(dtb_addr: PhysAddr) {
     dtb::parse_dtb(dtb_addr);
+
     mm::setup_mair_ranges();
     mm::setup_identity_mapping();
+
+    let (ram_start, ram_size) = meminfo::ram_range();
+    frame_alloc::init(
+        ram_start,
+        ram_size,
+        dtb_addr,
+        dtb_addr + dtb::dtb_size(dtb_addr) as u64,
+    );
+
     println!("Hello, from Rust");
     println!("Arming the timer (1000ms)");
     arch_timer::arm_ms(1000);

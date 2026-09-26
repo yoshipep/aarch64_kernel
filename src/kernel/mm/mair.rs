@@ -7,13 +7,13 @@
 use core::arch::asm;
 
 /* MAIR_ELx memory attribute encodings */
-const MAIR_DEVICE_NGNRNE: u64 = 0x00; // Device: non-Gathering, non-Reordering, no Early Write Acknowledgement
+const MAIR_DEVICE_NGNRE: u64 = 0x04; // Device: non-Gathering, non-Reordering, Early Write Acknowledgement
 const MAIR_NORMAL_NC: u64 = 0x44; // Normal: outer and inner non-cacheable
 const MAIR_NORMAL_WB: u64 = 0xFF; // Normal: outer and inner write-back cacheable, read/write allocate
 
 /// MAIR_ELx slot indices, used in the AttrIndx field of block/page descriptors
 pub enum MairIdx {
-    /// Device-nGnRnE — non-Gathering, non-Reordering, no Early Write Acknowledgement. Use for MMIO.
+    /// Device-nGnRE — non-Gathering, non-Reordering, Early Write Acknowledgement. Use for MMIO.
     Device = 0,
     /// Normal memory, outer and inner non-cacheable. Use for DMA buffers.
     NormalNC = 1,
@@ -45,8 +45,8 @@ fn configure_mair_range(conf: u64, range: MairIdx) {
 /// Must run before any page table that references `MairIdx::Device`, `NormalNC`, or `NormalWb` is walked by the MMU —
 /// see `setup_identity_mapping`.
 pub fn setup_mair_ranges() {
-    // Device: non-Gathering, non-Reordering, no-EarlyWriteACK
-    configure_mair_range(MAIR_DEVICE_NGNRNE, MairIdx::Device);
+    // Device: non-Gathering, non-Reordering, Early Write Acknowledgement
+    configure_mair_range(MAIR_DEVICE_NGNRE, MairIdx::Device);
 
     // Normal cacheable: write-back cacheable, inner shareable
     configure_mair_range(MAIR_NORMAL_WB, MairIdx::NormalWb);

@@ -23,7 +23,7 @@ unsafe extern "C" {
 /// Builds the identity page tables and enables the MMU
 ///
 /// Maps the first 2 GiB of physical address space 1:1 (VA = PA) using two 1 GiB block descriptors: `[0, 1 GiB)` as
-/// Device-nGnRnE (covers the GIC/UART MMIO ranges) and `[1 GiB, 2 GiB)` as Normal write-back cacheable (covers the
+/// Device-nGnRE (covers the GIC/UART MMIO ranges) and `[1 GiB, 2 GiB)` as Normal write-back cacheable (covers the
 /// kernel image and stack, linked at `0x50000000`). Assumes the kernel and all MMIO used before this call fit within
 /// that layout — see `L1_SIZE_PER_ENTRY`.
 pub fn setup_identity_mapping() {

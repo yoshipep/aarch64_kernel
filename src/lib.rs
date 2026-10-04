@@ -39,6 +39,7 @@ pub extern "C" fn kmain(dtb_addr: PhysAddr) {
 
     mm::setup_mair_ranges();
     mm::setup_identity_mapping();
+    mm::check_kimage_mapping();
 
     println!("Hello, from Rust");
     println!("Arming the timer (1000ms)");

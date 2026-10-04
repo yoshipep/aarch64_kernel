@@ -15,7 +15,7 @@ use crate::kernel::mm::pgtable::{
 };
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
-use crate::{println, utilities};
+use crate::{pr_info, utilities};
 
 use super::pgtable::LeafDescriptor;
 use super::pgtable_hwdef::*;
@@ -202,8 +202,9 @@ fn map_kimage() -> PhysAddr {
     );
 
     let first_va = kimage_va(sym_pa(addr_of_mut!(__kernel_start)));
-    println!(
-        "kimage tables: root {:#X}, image VA {:#X} (Pgd {:#X}, Pud {}, Pmd {}, Pte {})",
+    pr_info!(
+        "kimage",
+        "tables: root {:#X}, image VA {:#X} (Pgd {:#X}, Pud {}, Pmd {}, Pte {})",
         pgdir,
         first_va,
         Pgd::index(first_va),
@@ -219,6 +220,69 @@ fn map_kimage() -> PhysAddr {
     pgdir
 }
 
+/// Checks that the high-half image mapping translates and reaches the same frames as the identity map.
+///
+/// Must run after the MMU is on and `TTBR1` is loaded. Compares the first word of `.text` and of `.rodata` read
+/// through `kimage_va(pa)` with the same word read at `pa`, then writes a value through the high alias of a spare
+/// `.data` word and reads it back through its identity address. Reports the result with `pr_info!("kimage", ...)`; a
+/// missing mapping shows up as a data abort instead of a mismatch.
+pub fn check_kimage_mapping() {
+    let id_text = PhysAddr::new(addr_of_mut!(__kernel_start) as u64);
+    let hi_text = kimage_va(id_text) as *mut u64;
+    unsafe {
+        if id_text.as_ptr::<u64>().read_volatile()
+            != hi_text.read_volatile()
+        {
+            panic!("check_kimage_mapping: .text differs between the identity and high addresses");
+        }
+    }
+
+    let id_rodata = PhysAddr::new(addr_of_mut!(__rodata_start) as u64);
+    let hi_rodata = kimage_va(id_rodata) as *mut u64;
+    unsafe {
+        if id_rodata.as_ptr::<u64>().read_volatile()
+            != hi_rodata.read_volatile()
+        {
+            panic!("check_kimage_mapping: .rodata differs between the identity and high addresses");
+        }
+    }
+
+    let id_data = PhysAddr::new(addr_of_mut!(__data_start) as u64);
+    let hi_data = kimage_va(id_data) as *mut u64;
+    unsafe {
+        if id_data.as_ptr::<u64>().read_volatile()
+            != hi_data.read_volatile()
+        {
+            panic!("check_kimage_mapping: .data differs between the identity and high addresses");
+        }
+
+        let hi_val = hi_data.read_volatile();
+        core::ptr::write_volatile(hi_data, 0xBEBECAFE);
+        if id_data.as_ptr::<u64>().read_volatile() != 0xBEBECAFE {
+            panic!(
+                "check_kimage_mapping: write through the high alias not seen at the identity address"
+            );
+        }
+
+        core::ptr::write_volatile(hi_data, hi_val);
+
+        let id_val = id_data.as_ptr::<u64>().read_volatile();
+        core::ptr::write_volatile(id_data.as_mut_ptr::<u64>(), 0xBEBECAFE);
+        if hi_data.read_volatile() != 0xBEBECAFE {
+            panic!(
+                "check_kimage_mapping: write through the identity alias not seen at the high address"
+            );
+        }
+
+        core::ptr::write_volatile(id_data.as_mut_ptr::<u64>(), id_val);
+    }
+
+    pr_info!(
+        "kimage",
+        "read-back OK (text, rodata, data via the high and identity aliases)"
+    );
+}
+
 /// Builds the identity page tables and enables the MMU
 ///
 /// Maps the first 2 GiB of physical address space 1:1 (VA = PA) using two 1 GiB block descriptors: `[0, 1 GiB)` as
@@ -230,7 +294,7 @@ pub fn setup_identity_mapping() {
     // descriptors, so we cover the entire space by using huge pages
     unsafe {
         let idmap_pgd_ptr = PhysAddr::new(addr_of_mut!(__idmap_l0) as u64);
-        println!("idmap_pgd addr {:#X}", idmap_pgd_ptr);
+        pr_info!("idmap", "pgd at {:#X}", idmap_pgd_ptr);
 
         let mut pgd = Pgd::invalid();
 
@@ -242,7 +306,7 @@ pub fn setup_identity_mapping() {
 
         // 3. Set next level entry
         let idmap_pud_ptr = PhysAddr::new(addr_of_mut!(__idmap_l1) as u64);
-        println!("idmap_pud addr {:#X}", idmap_pud_ptr);
+        pr_info!("idmap", "pud at {:#X}", idmap_pud_ptr);
         pgd.set_output_address(idmap_pud_ptr);
         *idmap_pgd_ptr.as_mut_ptr() = pgd.raw();
 

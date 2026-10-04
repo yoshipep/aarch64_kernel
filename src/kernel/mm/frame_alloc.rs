@@ -36,7 +36,7 @@
 use crate::{
     ipc::irq_safe_mutex::Mutex,
     kernel::{mm::pgtable::PAGE_SIZE, phys_addr::PhysAddr},
-    println,
+    pr_info,
 };
 
 unsafe extern "C" {
@@ -117,13 +117,17 @@ pub fn init(start_ram: PhysAddr, ram_size: usize, start_dtb: PhysAddr, end_dtb: 
         occupied_ranges.swap(0, 1);
     }
 
-    println!(
-        "Occupied range 0: [{:#X}-{:#X}]",
-        occupied_ranges[0].0, occupied_ranges[0].1
+    pr_info!(
+        "frame_alloc",
+        "Occupied range 0 [{:#X}-{:#X}]",
+        occupied_ranges[0].0,
+        occupied_ranges[0].1
     );
-    println!(
-        "Occupied range 1: [{:#X}-{:#X}]",
-        occupied_ranges[1].0, occupied_ranges[1].1
+    pr_info!(
+        "frame_alloc",
+        "Occupied range 1 [{:#X}-{:#X}]",
+        occupied_ranges[1].0,
+        occupied_ranges[1].1
     );
 
     free_range(start_ram, occupied_ranges[0].0);

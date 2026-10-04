@@ -6,7 +6,7 @@
 
 use crate::{
     kernel::{device, phys_addr::PhysAddr},
-    println,
+    pr_info,
     utilities::convert,
 };
 
@@ -37,7 +37,7 @@ pub fn setup(dev: &device::PlatformDevice) {
         }
     }
 
-    println!("Usable ram: [{:#X}-{:#X}]", addr, addr + (size as u64) - 1);
+    pr_info!("meminfo", "Usable ram: [{:#X}-{:#X}]", addr, addr + (size as u64) - 1);
 
     unsafe {
         RAM_RANGE = (PhysAddr::new(addr), size);

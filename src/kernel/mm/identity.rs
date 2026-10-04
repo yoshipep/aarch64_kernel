@@ -8,7 +8,8 @@ use core::arch::asm;
 use core::ptr::addr_of_mut;
 
 use crate::kernel::mm::mair::MairIdx;
-use crate::kernel::mm::pgtable::{Descriptor, DescriptorType, L1_SIZE_PER_ENTRY, Pgd, Pud};
+use crate::kernel::mm::pgtable::{Descriptor, DescriptorType, PUD_SIZE, Pgd, Pud};
+use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
 use crate::println;
 
@@ -25,13 +26,13 @@ unsafe extern "C" {
 /// Maps the first 2 GiB of physical address space 1:1 (VA = PA) using two 1 GiB block descriptors: `[0, 1 GiB)` as
 /// Device-nGnRE (covers the GIC/UART MMIO ranges) and `[1 GiB, 2 GiB)` as Normal write-back cacheable (covers the
 /// kernel image and stack, linked at `0x50000000`). Assumes the kernel and all MMIO used before this call fit within
-/// that layout — see `L1_SIZE_PER_ENTRY`.
+/// that layout — see `PUD_SIZE`.
 pub fn setup_identity_mapping() {
     // As kernel is mapped at 0x50000000, and MMIO is at 0x8000000-0x90000000, we use L0 and L1
     // descriptors, so we cover the entire space by using huge pages
     unsafe {
-        let idmap_pgd_ptr = addr_of_mut!(__idmap_l0) as *mut u64;
-        println!("idmap_pgd addr {:?}", idmap_pgd_ptr);
+        let idmap_pgd_ptr = PhysAddr::new(addr_of_mut!(__idmap_l0) as u64);
+        println!("idmap_pgd addr {:#X}", idmap_pgd_ptr);
 
         let mut pgd = Pgd::invalid();
 
@@ -42,16 +43,17 @@ pub fn setup_identity_mapping() {
         pgd.set_attrs(table::UXNTABLE | table::APTABLE0);
 
         // 3. Set next level entry
-        let idmap_pud_ptr = addr_of_mut!(__idmap_l1) as *mut u64;
-        println!("idmap_pud addr {:?}", idmap_pud_ptr);
-        pgd.set_output_address(idmap_pud_ptr as u64);
-        *idmap_pgd_ptr = pgd.raw();
+        let idmap_pud_ptr = PhysAddr::new(addr_of_mut!(__idmap_l1) as u64);
+        println!("idmap_pud addr {:#X}", idmap_pud_ptr);
+        pgd.set_output_address(idmap_pud_ptr);
+        *idmap_pgd_ptr.as_mut_ptr() = pgd.raw();
 
         // We will set up at least 2 ranges, (NGNRNE and CACHEABLE). If we have to use more
         // than two ranges, the remaining will use CACHEABLE range. When setting up the final
         // mapping, we will use each configured MAIR range
         /* Descriptor for device memory */
-        let mut off = idmap_pud_ptr.offset(0);
+        let table = idmap_pud_ptr.as_mut_ptr::<u64>();
+        let mut off = table.add(0);
         let mut pud_dev = Pud::invalid();
 
         // 1.1 Mark as block descriptor
@@ -66,11 +68,11 @@ pub fn setup_identity_mapping() {
         pud_dev.set_ap(leaf::Ap::RwEl1);
 
         // 4.1 Set output address (identity map: VA = PA = n * 1 GiB)
-        pud_dev.set_output_address(0);
+        pud_dev.set_output_address(PhysAddr::new(0));
         *off = pud_dev.raw();
 
         /* Descriptor for normal memory */
-        off = idmap_pud_ptr.offset(1);
+        off = table.add(1);
         let mut pud_nwb = Pud::invalid();
 
         // 1.2 Mark as block descriptor
@@ -85,10 +87,10 @@ pub fn setup_identity_mapping() {
         pud_nwb.set_ap(leaf::Ap::RwEl1);
 
         // 4.2 Set output address (identity map: VA = PA = i * 1 GiB)
-        pud_nwb.set_output_address(L1_SIZE_PER_ENTRY as u64);
+        pud_nwb.set_output_address(PhysAddr::new(PUD_SIZE as u64));
         *off = pud_nwb.raw();
 
-        load_ttbr0(idmap_pgd_ptr as u64);
+        load_ttbr0(idmap_pgd_ptr);
     }
 
     // We can now safely enable MMU
@@ -137,7 +139,7 @@ fn enable_mmu() {
 
 /// Loads TTBR0_EL1 with the given page-table base address and invalidates stale TLB entries
 #[inline(always)]
-fn load_ttbr0(base: u64) {
+fn load_ttbr0(base: PhysAddr) {
     unsafe {
         asm!(
             "msr ttbr0_el1, {tmp}",
@@ -145,7 +147,7 @@ fn load_ttbr0(base: u64) {
             "tlbi vmalle1",
             "dsb nsh",
             "isb sy",
-            tmp = in(reg) base,
+            tmp = in(reg) base.as_u64(),
             options(nostack, preserves_flags)
         );
     }

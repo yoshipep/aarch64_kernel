@@ -23,16 +23,16 @@ SECTIONS {
         __text_end = .;
     } > RAM
 
-    __data_start = .;
     .rodata : ALIGN(PAGE_SIZE)
     {
         __rodata_start = .;
-        *(.rodata.*)
-    __rodata_end = .;
+        *(.rodata .rodata.*)
+        __rodata_end = .;
     } > RAM
 
-    .data : ALIGN(4K)
+    .data : ALIGN(PAGE_SIZE)
     {
+        __data_start = .;
         *(.data .data.*)
     } > RAM
 
@@ -45,6 +45,7 @@ SECTIONS {
         __idmap_l0 = .;
         . += PAGE_SIZE;
         __idmap_l1 = .;
+        . += PAGE_SIZE;
         _bss_end = .;
     } > RAM
 
@@ -54,4 +55,10 @@ SECTIONS {
     . = . + STACK_SIZE;
     . = ALIGN(PAGE_SIZE);
     __stack_top = .;
+
+    /*
+     * No runtime unwinding (panic=abort, the panic handler just loops), so the unwind tables are dead weight.
+     * The Rust pretty-printer pointer is only for GDB, we drop it since atm is useless
+     */
+    /DISCARD/ : { *(.eh_frame) *(.debug_gdb_scripts) }
 }

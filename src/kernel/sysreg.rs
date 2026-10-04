@@ -35,6 +35,12 @@ pub mod tcr {
     pub const T1SZ_48: u64 = 16 << 16;
     /// Bit \[23\]: disable TTBR1 walks
     pub const EPD1: u64 = 1 << 23;
+    /// Bits \[25:24\]: inner WB, read/write-allocate (TTBR1 table walks)
+    pub const IRGN1_WBWA: u64 = 0b01 << 24;
+    /// Bits \[27:26\]: outer WB, read/write-allocate (TTBR1 table walks)
+    pub const ORGN1_WBWA: u64 = 0b01 << 26;
+    /// Bits \[29:28\]: inner shareable (TTBR1 table walks)
+    pub const SH1_INNER: u64 = 0b11 << 28;
     /// Bits \[31:30\]: 4KB granule (TTBR1) — `0b10`, not `0b00`
     pub const TG1_4K: u64 = 0b10 << 30;
     /// Bits \[34:32\]: 44-bit PA (16 TB)

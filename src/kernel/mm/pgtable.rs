@@ -1,10 +1,20 @@
+use core::ptr::addr_of_mut;
+
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable_hwdef::leaf::{Ap, Shareability};
 use crate::kernel::phys_addr::PhysAddr;
 
+unsafe extern "C" {
+    static mut __kernel_start: u8;
+}
+
 /// Width of a virtual address: 48 bits, so the TTBR0 region is `[0, 2^48)` and the TTBR1 region is
 /// `[0xFFFF_0000_0000_0000, 2^64)`. Must match `T0SZ`/`T1SZ` in TCR_EL1 (`64 - VA_BITS = 16`).
 pub const VA_BITS: usize = 48;
+
+/// Virtual address where the kernel image starts in the TTBR1 (high) half. The image is mapped contiguously from here,
+/// so `kimage_va(pa)` is `KIMAGE_VADDR` plus the offset from `__kernel_start`.
+pub const KIMAGE_VADDR: u64 = 0xFFFF_8000_0000_0000;
 
 // Output-address (physical) field width in a descriptor. Distinct from VA_BITS: it lives on the
 // output side of translation and diverges from VA_BITS under LPA2 (52-bit). 4KB granule, non-LPA2.
@@ -278,3 +288,18 @@ impl Descriptor for Pte {
 }
 
 impl LeafDescriptor for Pte {}
+
+/// Returns the high-half virtual address of a kernel-image physical address: `KIMAGE_VADDR + (pa - __kernel_start)`.
+///
+/// `pa` must lie inside the kernel image, at or above `__kernel_start`.
+pub fn kimage_va(pa: PhysAddr) -> u64 {
+    KIMAGE_VADDR + (pa.as_u64() - addr_of_mut!(__kernel_start) as u64)
+}
+
+/// Inverse of `kimage_va`: returns the physical address of a kernel-image virtual address, `va - KIMAGE_VADDR +
+/// __kernel_start`.
+///
+/// `va` must lie inside the kernel image mapping, at or above `KIMAGE_VADDR`.
+pub fn kimage_pa(va: u64) -> PhysAddr {
+    PhysAddr::new(va - KIMAGE_VADDR + addr_of_mut!(__kernel_start) as u64)
+}

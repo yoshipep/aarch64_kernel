@@ -19,7 +19,7 @@ SECTIONS {
     {
         __text_start = .;
         *(.text.boot)
-        *(.text.*)
+        *(.text .text.*)
         __text_end = .;
     } > RAM
 

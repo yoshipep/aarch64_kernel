@@ -10,8 +10,7 @@ use core::ptr::addr_of_mut;
 use crate::kernel::mm::frame_alloc;
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable::{
-    Descriptor, DescriptorType, PUD_SIZE, PAGE_SIZE, Pgd, Pmd, Pte, Pud, TableDescriptor,
-    kimage_va,
+    kimage_va, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, TableDescriptor, PAGE_SIZE, PUD_SIZE,
 };
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
@@ -227,12 +226,10 @@ fn map_kimage() -> PhysAddr {
 /// `.data` word and reads it back through its identity address. Reports the result with `pr_info!("kimage", ...)`; a
 /// missing mapping shows up as a data abort instead of a mismatch.
 pub fn check_kimage_mapping() {
-    let id_text = PhysAddr::new(addr_of_mut!(__kernel_start) as u64);
+    let id_text = PhysAddr::new(addr_of_mut!(__text_start) as u64);
     let hi_text = kimage_va(id_text) as *mut u64;
     unsafe {
-        if id_text.as_ptr::<u64>().read_volatile()
-            != hi_text.read_volatile()
-        {
+        if id_text.as_ptr::<u64>().read_volatile() != hi_text.read_volatile() {
             panic!("check_kimage_mapping: .text differs between the identity and high addresses");
         }
     }
@@ -240,9 +237,7 @@ pub fn check_kimage_mapping() {
     let id_rodata = PhysAddr::new(addr_of_mut!(__rodata_start) as u64);
     let hi_rodata = kimage_va(id_rodata) as *mut u64;
     unsafe {
-        if id_rodata.as_ptr::<u64>().read_volatile()
-            != hi_rodata.read_volatile()
-        {
+        if id_rodata.as_ptr::<u64>().read_volatile() != hi_rodata.read_volatile() {
             panic!("check_kimage_mapping: .rodata differs between the identity and high addresses");
         }
     }
@@ -250,9 +245,7 @@ pub fn check_kimage_mapping() {
     let id_data = PhysAddr::new(addr_of_mut!(__data_start) as u64);
     let hi_data = kimage_va(id_data) as *mut u64;
     unsafe {
-        if id_data.as_ptr::<u64>().read_volatile()
-            != hi_data.read_volatile()
-        {
+        if id_data.as_ptr::<u64>().read_volatile() != hi_data.read_volatile() {
             panic!("check_kimage_mapping: .data differs between the identity and high addresses");
         }
 

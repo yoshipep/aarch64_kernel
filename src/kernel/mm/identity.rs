@@ -252,9 +252,7 @@ pub fn check_kimage_mapping() {
         let hi_val = hi_data.read_volatile();
         core::ptr::write_volatile(hi_data, 0xBEBECAFE);
         if id_data.as_ptr::<u64>().read_volatile() != 0xBEBECAFE {
-            panic!(
-                "check_kimage_mapping: write through the high alias not seen at the identity address"
-            );
+            panic!("check_kimage_mapping: write through the high alias not seen at the identity address");
         }
 
         core::ptr::write_volatile(hi_data, hi_val);
@@ -262,9 +260,7 @@ pub fn check_kimage_mapping() {
         let id_val = id_data.as_ptr::<u64>().read_volatile();
         core::ptr::write_volatile(id_data.as_mut_ptr::<u64>(), 0xBEBECAFE);
         if hi_data.read_volatile() != 0xBEBECAFE {
-            panic!(
-                "check_kimage_mapping: write through the identity alias not seen at the high address"
-            );
+            panic!("check_kimage_mapping: write through the identity alias not seen at the high address");
         }
 
         core::ptr::write_volatile(id_data.as_mut_ptr::<u64>(), id_val);

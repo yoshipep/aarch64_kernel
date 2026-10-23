@@ -104,8 +104,7 @@ pub trait Descriptor: Sized {
     /// Sets the descriptor's type field (bits \[1:0\]) to `type_`, leaving other bits untouched
     #[inline]
     fn set_type(&mut self, type_: DescriptorType) {
-        *self.raw_mut() =
-            (*self.raw_mut() & !Self::DESC_TYPE_MASK) | (type_ as u64 & Self::DESC_TYPE_MASK);
+        *self.raw_mut() = (*self.raw_mut() & !Self::DESC_TYPE_MASK) | (type_ as u64 & Self::DESC_TYPE_MASK);
     }
 
     /// Raw-ORs a bitmask of attribute bits into the descriptor.

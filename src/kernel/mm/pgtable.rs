@@ -288,6 +288,43 @@ impl Descriptor for Pte {
 
 impl LeafDescriptor for Pte {}
 
+/// Reads the `index`-th descriptor of the translation table at `table`.
+///
+/// The access is volatile: the table is also read by the hardware walker, so the compiler must not elide, merge or
+/// reorder it. This is the one place where a table's physical address becomes a pointer to dereference.
+///
+/// # Arguments
+///
+/// * `table` - physical address of a table page whose entries have the type `D`
+/// * `index` - entry number within the table, `0..PTRS_PER_TABLE` (usually `D::index(va)`)
+///
+/// # Returns
+///
+/// The descriptor stored in that slot, valid or not.
+pub fn read_entry<D: Descriptor>(table: PhysAddr, index: usize) -> D {
+    unsafe {
+        let slot = table.as_mut_ptr::<D>().add(index);
+        slot.read_volatile()
+    }
+}
+
+/// Writes `desc` to the `index`-th slot of the translation table at `table`.
+///
+/// The access is volatile, for the same reason as `read_entry`. It does not issue any barrier: making the store
+/// visible to the walker is up to the caller (`dsb ishst` once the table is complete).
+///
+/// # Arguments
+///
+/// * `table` - physical address of a table page whose entries have the type `D`
+/// * `index` - entry number within the table, `0..PTRS_PER_TABLE` (usually `D::index(va)`)
+/// * `desc` - the descriptor to store
+pub fn write_entry<D: Descriptor>(table: PhysAddr, index: usize, desc: D) {
+    unsafe {
+        let slot = table.as_mut_ptr::<D>().add(index);
+        core::ptr::write_volatile(slot, desc);
+    }
+}
+
 /// Returns the high-half virtual address of a kernel-image physical address: `KIMAGE_VADDR + (pa - __kernel_start)`.
 ///
 /// `pa` must lie inside the kernel image, at or above `__kernel_start`.

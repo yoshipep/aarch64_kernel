@@ -10,7 +10,8 @@ use core::ptr::addr_of_mut;
 use crate::kernel::mm::frame_alloc;
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable::{
-    kimage_va, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, TableDescriptor, PAGE_SIZE, PUD_SIZE,
+    kimage_va, read_entry, write_entry, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, TableDescriptor, PAGE_SIZE,
+    PUD_SIZE,
 };
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
@@ -49,30 +50,29 @@ fn sym_pa(sym: *mut u8) -> PhysAddr {
 /// * `table` - physical address of the current-level table (a `Pgd`, `Pud` or `Pmd` page, depending on `D`)
 /// * `va` - the virtual address being mapped
 fn get_or_alloc_table<D: TableDescriptor>(table: PhysAddr, va: u64) -> PhysAddr {
-    unsafe {
-        // Compute the slot into pmd table
-        let slot = table.as_mut_ptr::<D>().add(D::index(va));
-        // Extract the descriptor from the pointed addr. Read it as volatile
-        let descriptor = slot.read_volatile();
-        // If it is invalid means this ptedir has not been allocated so we do it
-        if !descriptor.is_valid() {
-            let page = frame_alloc::alloc();
-            if page == PhysAddr::new(0) {
-                panic!("get_or_alloc_table: out of frames for page tables");
-            }
-            utilities::mem::memset(page.as_mut_ptr(), 0x0, PAGE_SIZE);
-
-            let mut next_lvl_desc = D::invalid();
-            next_lvl_desc.set_type(DescriptorType::Table);
-            next_lvl_desc.set_attrs(table::UXNTABLE | table::APTABLE0);
-            next_lvl_desc.set_output_address(page);
-            core::ptr::write_volatile(slot, next_lvl_desc);
-
-            return page;
+    let index = D::index(va);
+    let descriptor: D = read_entry(table, index);
+    // If it is invalid means this ptedir has not been allocated so we do it
+    if !descriptor.is_valid() {
+        let page = frame_alloc::alloc();
+        if page == PhysAddr::new(0) {
+            panic!("get_or_alloc_table: out of frames for page tables");
         }
 
-        descriptor.output_address()
+        unsafe {
+            utilities::mem::memset(page.as_mut_ptr(), 0x0, PAGE_SIZE);
+        }
+
+        let mut next_lvl_desc = D::invalid();
+        next_lvl_desc.set_type(DescriptorType::Table);
+        next_lvl_desc.set_attrs(table::UXNTABLE | table::APTABLE0);
+        next_lvl_desc.set_output_address(page);
+        write_entry(table, index, next_lvl_desc);
+
+        return page;
     }
+
+    descriptor.output_address()
 }
 
 /// Maps one 4 KiB page: `va` -> `pa`, creating any missing intermediate tables.
@@ -93,26 +93,24 @@ fn map_page(root: PhysAddr, va: u64, pa: PhysAddr, ap: leaf::Ap, attrs: u64) {
     let pud_table = get_or_alloc_table::<Pgd>(root, va);
     let pmd_table = get_or_alloc_table::<Pud>(pud_table, va);
     let pte_table = get_or_alloc_table::<Pmd>(pmd_table, va);
-    unsafe {
-        let slot = pte_table.as_mut_ptr::<Pte>().add(Pte::index(va));
-        let descriptor = slot.read_volatile();
+    let index = Pte::index(va);
+    let descriptor: Pte = read_entry(pte_table, index);
 
-        // If the pte returned is not invalid that means there is something mapped there, just
-        // panic
-        if descriptor.is_valid() {
-            panic!("map_page: page already mapped");
-        }
-
-        // Build the pte entry and write it in the table
-        let mut pte = Pte::invalid();
-        pte.set_type(DescriptorType::Page);
-        pte.set_shareability(leaf::Shareability::Inner);
-        pte.set_ap(ap);
-        pte.set_mair_range(MairIdx::NormalWb);
-        pte.set_attrs(attrs);
-        pte.set_output_address(pa);
-        core::ptr::write_volatile(slot, pte);
+    // If the pte returned is not invalid that means there is something mapped there, just
+    // panic
+    if descriptor.is_valid() {
+        panic!("map_page: page already mapped");
     }
+
+    // Build the pte entry and write it in the table
+    let mut pte = Pte::invalid();
+    pte.set_type(DescriptorType::Page);
+    pte.set_shareability(leaf::Shareability::Inner);
+    pte.set_ap(ap);
+    pte.set_mair_range(MairIdx::NormalWb);
+    pte.set_attrs(attrs);
+    pte.set_output_address(pa);
+    write_entry(pte_table, index, pte);
 }
 
 /// Maps every page in `[start, end)` of the kernel image into the high half, `kimage_va(pa)` -> `pa`.
@@ -281,69 +279,64 @@ pub fn check_kimage_mapping() {
 pub fn setup_identity_mapping() {
     // As kernel is mapped at 0x50000000, and MMIO is at 0x8000000-0x90000000, we use L0 and L1
     // descriptors, so we cover the entire space by using huge pages
-    unsafe {
-        let idmap_pgd_ptr = PhysAddr::new(addr_of_mut!(__idmap_l0) as u64);
-        pr_info!("idmap", "pgd at {:#X}", idmap_pgd_ptr);
+    let idmap_pgd_ptr = PhysAddr::new(addr_of_mut!(__idmap_l0) as u64);
+    pr_info!("idmap", "pgd at {:#X}", idmap_pgd_ptr);
 
-        let mut pgd = Pgd::invalid();
+    let mut pgd = Pgd::invalid();
 
-        // 1. Mark the entry as Table Descriptor, it will cover 512 GiB
-        pgd.set_type(DescriptorType::Table);
+    // 1. Mark the entry as Table Descriptor, it will cover 512 GiB
+    pgd.set_type(DescriptorType::Table);
 
-        // 2. Set attributes
-        pgd.set_attrs(table::UXNTABLE | table::APTABLE0);
+    // 2. Set attributes
+    pgd.set_attrs(table::UXNTABLE | table::APTABLE0);
 
-        // 3. Set next level entry
-        let idmap_pud_ptr = PhysAddr::new(addr_of_mut!(__idmap_l1) as u64);
-        pr_info!("idmap", "pud at {:#X}", idmap_pud_ptr);
-        pgd.set_output_address(idmap_pud_ptr);
-        *idmap_pgd_ptr.as_mut_ptr() = pgd.raw();
+    // 3. Set next level entry
+    let idmap_pud_ptr = PhysAddr::new(addr_of_mut!(__idmap_l1) as u64);
+    pr_info!("idmap", "pud at {:#X}", idmap_pud_ptr);
+    pgd.set_output_address(idmap_pud_ptr);
+    write_entry(idmap_pgd_ptr, Pgd::index(0), pgd);
 
-        // We will set up at least 2 ranges, (NGNRNE and CACHEABLE). If we have to use more
-        // than two ranges, the remaining will use CACHEABLE range. When setting up the final
-        // mapping, we will use each configured MAIR range
-        /* Descriptor for device memory */
-        let table = idmap_pud_ptr.as_mut_ptr::<Pud>();
-        let mut off = table.add(0);
-        let mut pud_dev = Pud::invalid();
+    // We will set up at least 2 ranges, (NGNRNE and CACHEABLE). If we have to use more
+    // than two ranges, the remaining will use CACHEABLE range. When setting up the final
+    // mapping, we will use each configured MAIR range
+    /* Descriptor for device memory */
+    let mut pud_dev = Pud::invalid();
 
-        // 1.1 Mark as block descriptor
-        pud_dev.set_type(DescriptorType::Block);
+    // 1.1 Mark as block descriptor
+    pud_dev.set_type(DescriptorType::Block);
 
-        // 2.1 Setup MAIR range
-        pud_dev.set_mair_range(MairIdx::Device);
+    // 2.1 Setup MAIR range
+    pud_dev.set_mair_range(MairIdx::Device);
 
-        // 3.1 Set attributes
-        pud_dev.set_attrs(leaf::UXN | leaf::PXN | leaf::AF);
-        pud_dev.set_shareability(leaf::Shareability::NonShareable);
-        pud_dev.set_ap(leaf::Ap::RwEl1);
+    // 3.1 Set attributes
+    pud_dev.set_attrs(leaf::UXN | leaf::PXN | leaf::AF);
+    pud_dev.set_shareability(leaf::Shareability::NonShareable);
+    pud_dev.set_ap(leaf::Ap::RwEl1);
 
-        // 4.1 Set output address (identity map: VA = PA = n * 1 GiB)
-        pud_dev.set_output_address(PhysAddr::new(0));
-        *off = pud_dev;
+    // 4.1 Set output address (identity map: VA = PA = n * 1 GiB)
+    pud_dev.set_output_address(PhysAddr::new(0));
+    write_entry(idmap_pud_ptr, Pud::index(0), pud_dev);
 
-        /* Descriptor for normal memory */
-        off = table.add(1);
-        let mut pud_nwb = Pud::invalid();
+    /* Descriptor for normal memory */
+    let mut pud_nwb = Pud::invalid();
 
-        // 1.2 Mark as block descriptor
-        pud_nwb.set_type(DescriptorType::Block);
+    // 1.2 Mark as block descriptor
+    pud_nwb.set_type(DescriptorType::Block);
 
-        // 2.2 Setup MAIR range
-        pud_nwb.set_mair_range(MairIdx::NormalWb);
+    // 2.2 Setup MAIR range
+    pud_nwb.set_mair_range(MairIdx::NormalWb);
 
-        // 3.2 Set attributes
-        pud_nwb.set_attrs(leaf::UXN | leaf::AF);
-        pud_nwb.set_shareability(leaf::Shareability::Inner);
-        pud_nwb.set_ap(leaf::Ap::RwEl1);
+    // 3.2 Set attributes
+    pud_nwb.set_attrs(leaf::UXN | leaf::AF);
+    pud_nwb.set_shareability(leaf::Shareability::Inner);
+    pud_nwb.set_ap(leaf::Ap::RwEl1);
 
-        // 4.2 Set output address (identity map: VA = PA = i * 1 GiB)
-        pud_nwb.set_output_address(PhysAddr::new(PUD_SIZE as u64));
-        *off = pud_nwb;
+    // 4.2 Set output address (identity map: VA = PA = i * 1 GiB)
+    pud_nwb.set_output_address(PhysAddr::new(PUD_SIZE as u64));
+    write_entry(idmap_pud_ptr, Pud::index(PUD_SIZE as u64), pud_nwb);
 
-        load_ttbr0(idmap_pgd_ptr);
-        load_ttbr1(map_kimage());
-    }
+    load_ttbr0(idmap_pgd_ptr);
+    load_ttbr1(map_kimage());
 
     // We can now safely enable MMU
     enable_mmu();

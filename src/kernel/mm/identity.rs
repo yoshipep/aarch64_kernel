@@ -15,6 +15,7 @@ use crate::kernel::mm::pgtable::{
 };
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
+use crate::kernel::virt_addr::VirtAddr;
 use crate::{pr_info, utilities};
 
 use super::pgtable::LeafDescriptor;
@@ -49,7 +50,7 @@ fn sym_pa(sym: *mut u8) -> PhysAddr {
 ///
 /// * `table` - physical address of the current-level table (a `Pgd`, `Pud` or `Pmd` page, depending on `D`)
 /// * `va` - the virtual address being mapped
-fn get_or_alloc_table<D: TableDescriptor>(table: PhysAddr, va: u64) -> PhysAddr {
+fn get_or_alloc_table<D: TableDescriptor>(table: PhysAddr, va: VirtAddr) -> PhysAddr {
     let index = D::index(va);
     let descriptor: D = read_entry(table, index);
     // If it is invalid means this ptedir has not been allocated so we do it
@@ -88,7 +89,7 @@ fn get_or_alloc_table<D: TableDescriptor>(table: PhysAddr, va: u64) -> PhysAddr 
 /// * `pa` - physical address of the page it maps to
 /// * `ap` - read/write permission for EL1/EL0
 /// * `attrs` - extra attribute bits, e.g. `leaf::PXN | leaf::UXN | leaf::AF`
-fn map_page(root: PhysAddr, va: u64, pa: PhysAddr, ap: leaf::Ap, attrs: u64) {
+fn map_page(root: PhysAddr, va: VirtAddr, pa: PhysAddr, ap: leaf::Ap, attrs: u64) {
     // Perform the page walk and create intermediate pages if not exist
     let pud_table = get_or_alloc_table::<Pgd>(root, va);
     let pmd_table = get_or_alloc_table::<Pud>(pud_table, va);
@@ -225,7 +226,7 @@ fn map_kimage() -> PhysAddr {
 /// missing mapping shows up as a data abort instead of a mismatch.
 pub fn check_kimage_mapping() {
     let id_text = PhysAddr::new(addr_of_mut!(__text_start) as u64);
-    let hi_text = kimage_va(id_text) as *mut u64;
+    let hi_text = kimage_va(id_text).as_mut_ptr::<u64>();
     unsafe {
         if id_text.as_ptr::<u64>().read_volatile() != hi_text.read_volatile() {
             panic!("check_kimage_mapping: .text differs between the identity and high addresses");
@@ -233,7 +234,7 @@ pub fn check_kimage_mapping() {
     }
 
     let id_rodata = PhysAddr::new(addr_of_mut!(__rodata_start) as u64);
-    let hi_rodata = kimage_va(id_rodata) as *mut u64;
+    let hi_rodata = kimage_va(id_rodata).as_mut_ptr::<u64>();
     unsafe {
         if id_rodata.as_ptr::<u64>().read_volatile() != hi_rodata.read_volatile() {
             panic!("check_kimage_mapping: .rodata differs between the identity and high addresses");
@@ -241,7 +242,7 @@ pub fn check_kimage_mapping() {
     }
 
     let id_data = PhysAddr::new(addr_of_mut!(__data_start) as u64);
-    let hi_data = kimage_va(id_data) as *mut u64;
+    let hi_data = kimage_va(id_data).as_mut_ptr::<u64>();
     unsafe {
         if id_data.as_ptr::<u64>().read_volatile() != hi_data.read_volatile() {
             panic!("check_kimage_mapping: .data differs between the identity and high addresses");
@@ -294,7 +295,7 @@ pub fn setup_identity_mapping() {
     let idmap_pud_ptr = PhysAddr::new(addr_of_mut!(__idmap_l1) as u64);
     pr_info!("idmap", "pud at {:#X}", idmap_pud_ptr);
     pgd.set_output_address(idmap_pud_ptr);
-    write_entry(idmap_pgd_ptr, Pgd::index(0), pgd);
+    write_entry(idmap_pgd_ptr, Pgd::index(VirtAddr::new(0)), pgd);
 
     // We will set up at least 2 ranges, (NGNRNE and CACHEABLE). If we have to use more
     // than two ranges, the remaining will use CACHEABLE range. When setting up the final
@@ -315,7 +316,7 @@ pub fn setup_identity_mapping() {
 
     // 4.1 Set output address (identity map: VA = PA = n * 1 GiB)
     pud_dev.set_output_address(PhysAddr::new(0));
-    write_entry(idmap_pud_ptr, Pud::index(0), pud_dev);
+    write_entry(idmap_pud_ptr, Pud::index(VirtAddr::new(0)), pud_dev);
 
     /* Descriptor for normal memory */
     let mut pud_nwb = Pud::invalid();
@@ -332,8 +333,9 @@ pub fn setup_identity_mapping() {
     pud_nwb.set_ap(leaf::Ap::RwEl1);
 
     // 4.2 Set output address (identity map: VA = PA = i * 1 GiB)
-    pud_nwb.set_output_address(PhysAddr::new(PUD_SIZE as u64));
-    write_entry(idmap_pud_ptr, Pud::index(PUD_SIZE as u64), pud_nwb);
+    let ram_base = PUD_SIZE as u64;
+    pud_nwb.set_output_address(PhysAddr::new(ram_base));
+    write_entry(idmap_pud_ptr, Pud::index(VirtAddr::new(ram_base)), pud_nwb);
 
     load_ttbr0(idmap_pgd_ptr);
     load_ttbr1(map_kimage());

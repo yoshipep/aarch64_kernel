@@ -2,11 +2,10 @@
 //!
 //! `PhysAddr` wraps a raw `u64` to give physical addresses one canonical type, used consistently by everything that
 //! passes one around (`kmain`, `meminfo`, `dtb`, `mm::frame_alloc`, ...) instead of an ad-hoc mix of `u64`/`usize` that
-//! needs casting at every boundary. Deliberately scoped to just this: no `VirtAddr` counterpart exists yet, because
-//! nothing in this kernel currently has both a physical and a virtual address for the same thing that could be mixed
-//! up — everything is identity-mapped (VA == PA) until the kernel high mapping (Task 5) lands. That's the point to add
-//! `VirtAddr` and let the two types stop a real class of bug; before that, a second type would have nothing to guard
-//! against.
+//! needs casting at every boundary. Its counterpart for addresses that go through the MMU is `VirtAddr`
+//! (`virt_addr.rs`): once the kernel image has a high alias (`kimage_va`) and RAM a linear map, the same memory has a
+//! physical and a virtual address, and keeping them as two types stops one being passed where the other is expected.
+//! Converting between them is explicit and goes through the mapping functions, never a cast.
 //!
 //! Deliberately not tied to `usize`: `usize` is defined by this *program's* pointer width, which isn't the same
 //! concept as the *hardware's* physical-addressing width (see `pgtable::OA_BITS`'s own doc comment on that

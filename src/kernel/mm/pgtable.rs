@@ -3,6 +3,7 @@ use core::ptr::addr_of_mut;
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable_hwdef::leaf::{Ap, Shareability};
 use crate::kernel::phys_addr::PhysAddr;
+use crate::kernel::virt_addr::VirtAddr;
 
 unsafe extern "C" {
     static mut __kernel_start: u8;
@@ -71,9 +72,9 @@ pub trait Descriptor: Sized {
     const SHIFT: usize;
 
     /// Returns the index of `va`'s entry in a table of this level: bits `[SHIFT + 8 : SHIFT]` of `va`
-    fn index(va: u64) -> usize {
+    fn index(va: VirtAddr) -> usize {
         // provided method, no `self`
-        ((va >> Self::SHIFT) & (PTRS_PER_TABLE as u64 - 1)) as usize
+        ((va.as_u64() >> Self::SHIFT) & (PTRS_PER_TABLE as u64 - 1)) as usize
     }
 
     /// Builds a descriptor directly from a raw 64-bit value, with no validation.
@@ -328,14 +329,14 @@ pub fn write_entry<D: Descriptor>(table: PhysAddr, index: usize, desc: D) {
 /// Returns the high-half virtual address of a kernel-image physical address: `KIMAGE_VADDR + (pa - __kernel_start)`.
 ///
 /// `pa` must lie inside the kernel image, at or above `__kernel_start`.
-pub fn kimage_va(pa: PhysAddr) -> u64 {
-    KIMAGE_VADDR + (pa.as_u64() - addr_of_mut!(__kernel_start) as u64)
+pub fn kimage_va(pa: PhysAddr) -> VirtAddr {
+    VirtAddr::new(KIMAGE_VADDR + (pa.as_u64() - addr_of_mut!(__kernel_start) as u64))
 }
 
 /// Inverse of `kimage_va`: returns the physical address of a kernel-image virtual address, `va - KIMAGE_VADDR +
 /// __kernel_start`.
 ///
 /// `va` must lie inside the kernel image mapping, at or above `KIMAGE_VADDR`.
-pub fn kimage_pa(va: u64) -> PhysAddr {
-    PhysAddr::new(va - KIMAGE_VADDR + addr_of_mut!(__kernel_start) as u64)
+pub fn kimage_pa(va: VirtAddr) -> PhysAddr {
+    PhysAddr::new(va.as_u64() - KIMAGE_VADDR + addr_of_mut!(__kernel_start) as u64)
 }

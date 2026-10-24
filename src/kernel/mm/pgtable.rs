@@ -46,6 +46,12 @@ pub const PUD_SHIFT: usize = Pud::SHIFT;
 /// Bytes covered by one Pud entry (1 GiB): the size of a Pud `Block` mapping or of the Pmd table a `Table` points to.
 pub const PUD_SIZE: usize = 1 << PUD_SHIFT;
 
+/// Bit position of the Pmd index in a virtual address (21); same value as `Pmd::SHIFT`.
+pub const PMD_SHIFT: usize = Pmd::SHIFT;
+
+/// Bytes covered by one Pmd entry (2 MiB): the size of a Pmd `Block` mapping or of the Pte table a `Table` points to.
+pub const PMD_SIZE: usize = 1 << PMD_SHIFT;
+
 /// Type field (bits \[1:0\]) of a descriptor. The meaning of `0b11` depends on the level, see `DescriptorType::Table`.
 #[repr(u64)]
 pub enum DescriptorType {
@@ -157,6 +163,9 @@ pub trait TableDescriptor: Descriptor {
 pub trait LeafDescriptor: Descriptor {
     const ATTR_IDX_SHIFT: u64 = 2;
 
+    /// The type field a leaf at this level carries: `Block` at Pud and Pmd, `Page` at Pte
+    const LEAF_TYPE: DescriptorType;
+
     /// Sets the AttrIndx field (bits \[4:2\]) to the given MAIR_EL1 slot
     #[inline]
     fn set_mair_range(&mut self, idx: MairIdx) {
@@ -230,7 +239,9 @@ impl Descriptor for Pud {
 
 impl TableDescriptor for Pud {}
 
-impl LeafDescriptor for Pud {}
+impl LeafDescriptor for Pud {
+    const LEAF_TYPE: DescriptorType = DescriptorType::Block;
+}
 
 /// L2 table-or-block descriptor (or `Invalid`, unmapped). `Table` covers 2 MiB per entry (points to an L3 table);
 /// `Block` maps 2 MiB directly as a leaf (huge page).
@@ -259,7 +270,9 @@ impl Descriptor for Pmd {
 
 impl TableDescriptor for Pmd {}
 
-impl LeafDescriptor for Pmd {}
+impl LeafDescriptor for Pmd {
+    const LEAF_TYPE: DescriptorType = DescriptorType::Block;
+}
 
 /// L3 page descriptor (covers 4 KiB per entry). Only ever `Invalid` or `Page` — the `Page` type encoding (bits \[1:0\]
 /// = `0b11`) means "page" at this level, unlike the same encoding meaning "table" at L0-L2 (see
@@ -287,43 +300,8 @@ impl Descriptor for Pte {
     }
 }
 
-impl LeafDescriptor for Pte {}
-
-/// Reads the `index`-th descriptor of the translation table at `table`.
-///
-/// The access is volatile: the table is also read by the hardware walker, so the compiler must not elide, merge or
-/// reorder it. This is the one place where a table's physical address becomes a pointer to dereference.
-///
-/// # Arguments
-///
-/// * `table` - physical address of a table page whose entries have the type `D`
-/// * `index` - entry number within the table, `0..PTRS_PER_TABLE` (usually `D::index(va)`)
-///
-/// # Returns
-///
-/// The descriptor stored in that slot, valid or not.
-pub fn read_entry<D: Descriptor>(table: PhysAddr, index: usize) -> D {
-    unsafe {
-        let slot = table.as_mut_ptr::<D>().add(index);
-        slot.read_volatile()
-    }
-}
-
-/// Writes `desc` to the `index`-th slot of the translation table at `table`.
-///
-/// The access is volatile, for the same reason as `read_entry`. It does not issue any barrier: making the store
-/// visible to the walker is up to the caller (`dsb ishst` once the table is complete).
-///
-/// # Arguments
-///
-/// * `table` - physical address of a table page whose entries have the type `D`
-/// * `index` - entry number within the table, `0..PTRS_PER_TABLE` (usually `D::index(va)`)
-/// * `desc` - the descriptor to store
-pub fn write_entry<D: Descriptor>(table: PhysAddr, index: usize, desc: D) {
-    unsafe {
-        let slot = table.as_mut_ptr::<D>().add(index);
-        core::ptr::write_volatile(slot, desc);
-    }
+impl LeafDescriptor for Pte {
+    const LEAF_TYPE: DescriptorType = DescriptorType::Page;
 }
 
 /// Returns the high-half virtual address of a kernel-image physical address: `KIMAGE_VADDR + (pa - __kernel_start)`.

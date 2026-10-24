@@ -12,6 +12,7 @@ const MAIR_NORMAL_NC: u64 = 0x44; // Normal: outer and inner non-cacheable
 const MAIR_NORMAL_WB: u64 = 0xFF; // Normal: outer and inner write-back cacheable, read/write allocate
 
 /// MAIR_ELx slot indices, used in the AttrIndx field of block/page descriptors
+#[derive(Clone, Copy)]
 pub enum MairIdx {
     /// Device-nGnRE — non-Gathering, non-Reordering, Early Write Acknowledgement. Use for MMIO.
     Device = 0,

@@ -7,16 +7,13 @@
 use core::arch::asm;
 use core::ptr::addr_of_mut;
 
-use crate::kernel::mm::frame_alloc;
 use crate::kernel::mm::mair::MairIdx;
-use crate::kernel::mm::pgtable::{
-    kimage_va, read_entry, write_entry, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, TableDescriptor, PAGE_SIZE,
-    PUD_SIZE,
-};
+use crate::kernel::mm::map::{self, write_entry};
+use crate::kernel::mm::pgtable::{kimage_va, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, PAGE_SIZE, PUD_SIZE};
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
 use crate::kernel::virt_addr::VirtAddr;
-use crate::{pr_info, utilities};
+use crate::pr_info;
 
 use super::pgtable::LeafDescriptor;
 use super::pgtable_hwdef::*;
@@ -41,106 +38,29 @@ fn sym_pa(sym: *mut u8) -> PhysAddr {
     PhysAddr::new(sym as u64)
 }
 
-/// Returns the physical address of the next-level table that `va` falls under, creating it first if needed.
+/// Maps `[start, end)` of the kernel image into the high half, `kimage_va(pa)` -> `pa`, with the permissions in `prot`.
 ///
-/// Looks up `D`'s slot for `va` in `table`. If that descriptor is invalid, allocates and zeroes a new page, installs a
-/// `Table` descriptor pointing at it, and returns it; if it's already valid, returns the table it points at.
-///
-/// # Arguments
-///
-/// * `table` - physical address of the current-level table (a `Pgd`, `Pud` or `Pmd` page, depending on `D`)
-/// * `va` - the virtual address being mapped
-fn get_or_alloc_table<D: TableDescriptor>(table: PhysAddr, va: VirtAddr) -> PhysAddr {
-    let index = D::index(va);
-    let descriptor: D = read_entry(table, index);
-    // If it is invalid means this ptedir has not been allocated so we do it
-    if !descriptor.is_valid() {
-        let page = frame_alloc::alloc();
-        if page == PhysAddr::new(0) {
-            panic!("get_or_alloc_table: out of frames for page tables");
-        }
-
-        unsafe {
-            utilities::mem::memset(page.as_mut_ptr(), 0x0, PAGE_SIZE);
-        }
-
-        let mut next_lvl_desc = D::invalid();
-        next_lvl_desc.set_type(DescriptorType::Table);
-        next_lvl_desc.set_attrs(table::UXNTABLE | table::APTABLE0);
-        next_lvl_desc.set_output_address(page);
-        write_entry(table, index, next_lvl_desc);
-
-        return page;
-    }
-
-    descriptor.output_address()
-}
-
-/// Maps one 4 KiB page: `va` -> `pa`, creating any missing intermediate tables.
-///
-/// Walks `root` down to the Pte table for `va` (`get_or_alloc_table` at the Pgd, Pud and Pmd levels), then writes the
-/// leaf `Pte`. The memory type (`NormalWb`) and shareability (`Inner`) are the same for every kernel region, so they
-/// are fixed here; only the permissions vary per call.
-///
-/// # Arguments
-///
-/// * `root` - physical address of the Pgd table
-/// * `va` - virtual address of the page
-/// * `pa` - physical address of the page it maps to
-/// * `ap` - read/write permission for EL1/EL0
-/// * `attrs` - extra attribute bits, e.g. `leaf::PXN | leaf::UXN | leaf::AF`
-fn map_page(root: PhysAddr, va: VirtAddr, pa: PhysAddr, ap: leaf::Ap, attrs: u64) {
-    // Perform the page walk and create intermediate pages if not exist
-    let pud_table = get_or_alloc_table::<Pgd>(root, va);
-    let pmd_table = get_or_alloc_table::<Pud>(pud_table, va);
-    let pte_table = get_or_alloc_table::<Pmd>(pmd_table, va);
-    let index = Pte::index(va);
-    let descriptor: Pte = read_entry(pte_table, index);
-
-    // If the pte returned is not invalid that means there is something mapped there, just
-    // panic
-    if descriptor.is_valid() {
-        panic!("map_page: page already mapped");
-    }
-
-    // Build the pte entry and write it in the table
-    let mut pte = Pte::invalid();
-    pte.set_type(DescriptorType::Page);
-    pte.set_shareability(leaf::Shareability::Inner);
-    pte.set_ap(ap);
-    pte.set_mair_range(MairIdx::NormalWb);
-    pte.set_attrs(attrs);
-    pte.set_output_address(pa);
-    write_entry(pte_table, index, pte);
-}
-
-/// Maps every page in `[start, end)` of the kernel image into the high half, `kimage_va(pa)` -> `pa`.
-///
-/// `start` is rounded down and `end` up to page boundaries, so a region whose linker symbols aren't page-aligned
-/// (e.g. the end of `.text`) still covers its last partial page. The virtual address is derived from each page's
-/// physical address here, so callers can't pass a mismatched pair.
+/// Both ends are rounded outwards to page boundaries, so a region whose linker symbols aren't page-aligned (e.g. the
+/// end of `.text`) still covers its last partial page. The virtual address is derived from `start` here, so callers
+/// can't pass a mismatched pair.
 ///
 /// # Arguments
 ///
 /// * `root` - physical address of the Pgd table
 /// * `start` - physical address of the first byte of the region
 /// * `end` - physical address one past the last byte of the region
-/// * `ap` - read/write permission for EL1/EL0
-/// * `attrs` - extra attribute bits, e.g. `leaf::PXN | leaf::UXN | leaf::AF`
-fn map_range(root: PhysAddr, start: PhysAddr, end: PhysAddr, ap: leaf::Ap, attrs: u64) {
-    let mut page = start.align_down(PAGE_SIZE as u64);
-    while page < end {
-        let vaddr = kimage_va(page);
-        map_page(root, vaddr, page, ap, attrs);
-
-        page = page + PAGE_SIZE as u64;
-    }
+/// * `prot` - memory type, shareability and permissions
+fn map_kimage_region(root: PhysAddr, start: PhysAddr, end: PhysAddr, prot: map::Prot) {
+    let start = start.align_down(PAGE_SIZE as u64);
+    let end = end.align_up(PAGE_SIZE as u64);
+    map::map_range(root, kimage_va(start), start, end - start, prot);
 }
 
 /// Builds the TTBR1 page tables that map the kernel image at `KIMAGE_VADDR`, and returns the root table.
 ///
-/// Allocates and zeroes a Pgd, then maps each region page by page with its own permissions: `.text` read-only and
-/// executable by EL1, `.rodata` read-only, `.data`/`.bss` and the stack read-write, all non-executable. The page
+/// Allocates and zeroes a Pgd, then maps each region with `map::map_range` (largest block that fits) and its own
+/// permissions: `.text` read-only and executable by EL1, `.rodata` read-only, `.data`/`.bss` and the stack read-write,
+/// all non-executable. Each region is rounded outwards to whole pages first. The page
 /// between `__kernel_end` and the stack is left unmapped as a guard page. Runs with the MMU off, so tables are written
 /// through physical addresses. Ends with a `dsb ishst` so the table writes are complete before the root is published
 /// by `load_ttbr1`.
@@ -153,50 +73,50 @@ fn map_range(root: PhysAddr, start: PhysAddr, end: PhysAddr, ap: leaf::Ap, attrs
 ///
 /// If the frame allocator runs out of pages for the tables.
 fn map_kimage() -> PhysAddr {
-    let pgdir = frame_alloc::alloc(); // 512 GiB
-    if pgdir == PhysAddr::new(0) {
-        panic!("map_kimage: out of frames for the TTBR1 root table");
-    }
-
-    unsafe {
-        utilities::mem::memset(pgdir.as_mut_ptr(), 0x0, PAGE_SIZE);
-    }
+    let pgdir = map::alloc_table();
 
     // 1. Build the walk for text pages
-    map_range(
+    let mut prot = map::Prot {
+        ap: leaf::Ap::RoEl1,
+        mair: MairIdx::NormalWb,
+        sh: leaf::Shareability::Inner,
+        attrs: leaf::UXN | leaf::AF,
+    };
+
+    map_kimage_region(
         pgdir,
         sym_pa(addr_of_mut!(__text_start)),
         sym_pa(addr_of_mut!(__text_end)),
-        leaf::Ap::RoEl1,
-        leaf::UXN | leaf::AF,
+        prot,
     );
 
     // 2. Build the walk for rodata pages
-    map_range(
+    prot.attrs = leaf::PXN | leaf::UXN | leaf::AF;
+
+    map_kimage_region(
         pgdir,
         sym_pa(addr_of_mut!(__rodata_start)),
         sym_pa(addr_of_mut!(__rodata_end)),
-        leaf::Ap::RoEl1,
-        leaf::PXN | leaf::UXN | leaf::AF,
+        prot,
     );
 
     // 3. Build the walk for data pages
-    map_range(
+    prot.ap = leaf::Ap::RwEl1;
+
+    map_kimage_region(
         pgdir,
         sym_pa(addr_of_mut!(__data_start)),
         sym_pa(addr_of_mut!(__data_end)),
-        leaf::Ap::RwEl1,
-        leaf::PXN | leaf::UXN | leaf::AF,
+        prot,
     );
 
     // 4. Build the walk for stack pages. We start a page after __kernel_end so we leave a guard
     //    page in between data and stack sections
-    map_range(
+    map_kimage_region(
         pgdir,
         sym_pa(addr_of_mut!(__kernel_end)) + PAGE_SIZE as u64,
         sym_pa(addr_of_mut!(__stack_top)),
-        leaf::Ap::RwEl1,
-        leaf::PXN | leaf::UXN | leaf::AF,
+        prot,
     );
 
     let first_va = kimage_va(sym_pa(addr_of_mut!(__kernel_start)));

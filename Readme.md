@@ -21,7 +21,9 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - **Exception handling** — full vector table with handlers for synchronous exceptions (SVC), IRQs, FIQs, and SErrors. Unimplemented exception classes are decoded and reported
 - **IRQ-safe mutex** — spinlock that masks interrupts while held, preventing deadlocks between main code and interrupt handlers
 - **Platform features** — compile-time platform selection via Cargo features (`qemu-virt` default). Platform-specific constants (e.g., early console address) are gated behind feature flags, preparing for future hardware targets like Raspberry Pi
-- **Identity mapping and MMU** — sets up MAIR_EL1 (device nGnRnE, normal write-back, normal non-cacheable), builds a two-level page table (L0 table → L1 1 GiB block descriptors) for identity mapping, configures TCR_EL1 (48-bit VA, 40-bit PA, 4K granule, inner-shareable cacheable), and enables the MMU via SCTLR_EL1
+- **Identity mapping and MMU** — sets up MAIR_EL1 (device nGnRnE, normal write-back, normal non-cacheable), builds a temporary identity map in TTBR0 (L0 table → L1 1 GiB block descriptors), configures TCR_EL1 (48-bit VA in both halves, 44-bit PA, 4K granule, inner-shareable cacheable), and enables the MMU via SCTLR_EL1
+- **Physical frame allocator** — hands out 4 KiB frames from the RAM found in the DTB, as a free list threaded through the free frames themselves
+- **Kernel virtual memory in TTBR1** — the kernel image mapped at `0xFFFF_8000_0000_0000` with per-region permissions (W^X), and all of RAM mapped at `0xFFFF_0000_0000_0000` (the linear map), both built with a layered page-table API that picks the largest block that fits. Typed `PhysAddr`/`VirtAddr` keep physical and virtual addresses apart
 
 ---
 

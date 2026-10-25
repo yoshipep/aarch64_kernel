@@ -30,16 +30,12 @@ pub extern "C" fn kmain(dtb_addr: PhysAddr) {
     dtb::parse_dtb(dtb_addr);
 
     let (ram_start, ram_size) = meminfo::ram_range();
-    frame_alloc::init(
-        ram_start,
-        ram_size,
-        dtb_addr,
-        dtb_addr + dtb::dtb_size(dtb_addr) as u64,
-    );
+    frame_alloc::init(ram_start, ram_size, dtb_addr, dtb_addr + dtb::dtb_size(dtb_addr) as u64);
 
     mm::setup_mair_ranges();
     mm::setup_identity_mapping();
     mm::check_kimage_mapping();
+    mm::check_linear_mapping();
 
     println!("Hello, from Rust");
     println!("Arming the timer (1000ms)");

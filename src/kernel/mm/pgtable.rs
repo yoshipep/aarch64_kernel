@@ -1,4 +1,5 @@
 use core::ptr::addr_of_mut;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable_hwdef::leaf::{Ap, Shareability};
@@ -16,6 +17,14 @@ pub const VA_BITS: usize = 48;
 /// Virtual address where the kernel image starts in the TTBR1 (high) half. The image is mapped contiguously from here,
 /// so `kimage_va(pa)` is `KIMAGE_VADDR` plus the offset from `__kernel_start`.
 pub const KIMAGE_VADDR: u64 = 0xFFFF_8000_0000_0000;
+
+/// Virtual address where the linear map of physical memory starts, in the lower half of the TTBR1 region. Physical
+/// address 0 maps here, so `phys_to_virt(pa)` is `PAGE_OFFSET + pa`. It is 1 GiB aligned, so VA and PA stay congruent
+/// modulo the Pud block size and a 1 GiB block can map RAM directly.
+///
+/// Derived from `VA_BITS` like Linux's `-(1 << VA_BITS)`: the start of the TTBR1 region, `0xFFFF_0000_0000_0000` for
+/// 48 bits.
+pub const PAGE_OFFSET: u64 = u64::MAX << VA_BITS;
 
 // Output-address (physical) field width in a descriptor. Distinct from VA_BITS: it lives on the
 // output side of translation and diverges from VA_BITS under LPA2 (52-bit). 4KB granule, non-LPA2.
@@ -317,4 +326,47 @@ pub fn kimage_va(pa: PhysAddr) -> VirtAddr {
 /// `va` must lie inside the kernel image mapping, at or above `KIMAGE_VADDR`.
 pub fn kimage_pa(va: VirtAddr) -> PhysAddr {
     PhysAddr::new(va.as_u64() - KIMAGE_VADDR + addr_of_mut!(__kernel_start) as u64)
+}
+
+/// Whether the linear map is live, i.e. TTBR1 maps RAM at `PAGE_OFFSET` and the MMU is on. Read by `phys_ptr`.
+static LINEAR_MAP_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// Marks the linear map as live, so `phys_ptr` starts translating physical addresses through it.
+///
+/// Call once, after the MMU is on with the linear map in TTBR1 and before anything that relies on it.
+pub fn set_linear_map_live() {
+    LINEAR_MAP_LIVE.store(true, Ordering::Relaxed);
+}
+
+/// Returns the linear-map virtual address of a physical address: `PAGE_OFFSET + pa`.
+///
+/// The only place that spells out the linear-map formula. `pa` must be backed by RAM covered by the linear map.
+pub fn phys_to_virt(pa: PhysAddr) -> VirtAddr {
+    VirtAddr::new(pa.as_u64() + PAGE_OFFSET)
+}
+
+/// Inverse of `phys_to_virt`: returns the physical address of a linear-map virtual address, `va - PAGE_OFFSET`.
+///
+/// `va` must lie in the linear map, at or above `PAGE_OFFSET` and below `KIMAGE_VADDR`.
+///
+/// # Panics
+///
+/// In debug builds, if `va` is outside the linear map (`debug_assert!`).
+pub fn virt_to_phys(va: VirtAddr) -> PhysAddr {
+    debug_assert!(va.as_u64() >= PAGE_OFFSET && va.as_u64() < KIMAGE_VADDR);
+    PhysAddr::new(va.as_u64() - PAGE_OFFSET)
+}
+
+/// Returns a pointer through which the memory at physical address `pa` can be read and written right now.
+///
+/// Before the linear map is live (MMU off, or only the identity map) the physical address itself is the pointer. Once
+/// `set_linear_map_live` has run, it is the address's linear-map alias, `phys_to_virt(pa)`. `read_entry`,
+/// `write_entry` and the code that zeroes or walks a freshly allocated frame go through this instead of casting a
+/// `PhysAddr`.
+pub fn phys_ptr<T>(pa: PhysAddr) -> *mut T {
+    if LINEAR_MAP_LIVE.load(Ordering::Relaxed) {
+        return phys_to_virt(pa).as_mut_ptr();
+    }
+
+    pa.as_mut_ptr()
 }

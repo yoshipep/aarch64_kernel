@@ -1,15 +1,22 @@
-//! Identity mapping and MMU bring-up
+//! Identity mapping, kernel page tables and MMU bring-up
 //!
-//! Builds a temporary identity map (VA = PA) covering the kernel image and MMIO, then enables the MMU. The kernel is
-//! linked at a physical address, so keeping VA == PA lets execution continue unchanged across the MMU-enable transition
-//! — no relocation needed yet. This map is torn down later once a proper high-half kernel mapping takes over.
+//! Builds the page tables the kernel boots with and enables the MMU. TTBR0 holds a temporary identity map (VA = PA)
+//! covering the kernel image and MMIO: the kernel is linked at a physical address, so keeping VA == PA lets execution
+//! continue unchanged across the MMU-enable transition. TTBR1 holds the kernel image at `KIMAGE_VADDR` with its final
+//! permissions (`map_kimage`) and the linear map of RAM at `PAGE_OFFSET` (`map_linear`). The identity map is torn down
+//! later, once the kernel runs entirely from the high half.
 
 use core::arch::asm;
 use core::ptr::addr_of_mut;
 
+use crate::kernel::meminfo;
+use crate::kernel::mm::frame_alloc;
 use crate::kernel::mm::mair::MairIdx;
-use crate::kernel::mm::map::{self, write_entry};
-use crate::kernel::mm::pgtable::{kimage_va, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, PAGE_SIZE, PUD_SIZE};
+use crate::kernel::mm::map::{self, map_range, write_entry};
+use crate::kernel::mm::pgtable::{
+    kimage_va, phys_ptr, phys_to_virt, set_linear_map_live, Descriptor, DescriptorType, Pgd, Pmd, Pte, Pud, PAGE_SIZE,
+    PUD_SIZE,
+};
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::{sctlr, tcr};
 use crate::kernel::virt_addr::VirtAddr;
@@ -73,7 +80,7 @@ fn map_kimage_region(root: PhysAddr, start: PhysAddr, end: PhysAddr, prot: map::
 ///
 /// If the frame allocator runs out of pages for the tables.
 fn map_kimage() -> PhysAddr {
-    let pgdir = map::alloc_table();
+    let kernel_pgd = map::alloc_table();
 
     // 1. Build the walk for text pages
     let mut prot = map::Prot {
@@ -84,7 +91,7 @@ fn map_kimage() -> PhysAddr {
     };
 
     map_kimage_region(
-        pgdir,
+        kernel_pgd,
         sym_pa(addr_of_mut!(__text_start)),
         sym_pa(addr_of_mut!(__text_end)),
         prot,
@@ -94,7 +101,7 @@ fn map_kimage() -> PhysAddr {
     prot.attrs = leaf::PXN | leaf::UXN | leaf::AF;
 
     map_kimage_region(
-        pgdir,
+        kernel_pgd,
         sym_pa(addr_of_mut!(__rodata_start)),
         sym_pa(addr_of_mut!(__rodata_end)),
         prot,
@@ -104,7 +111,7 @@ fn map_kimage() -> PhysAddr {
     prot.ap = leaf::Ap::RwEl1;
 
     map_kimage_region(
-        pgdir,
+        kernel_pgd,
         sym_pa(addr_of_mut!(__data_start)),
         sym_pa(addr_of_mut!(__data_end)),
         prot,
@@ -113,7 +120,7 @@ fn map_kimage() -> PhysAddr {
     // 4. Build the walk for stack pages. We start a page after __kernel_end so we leave a guard
     //    page in between data and stack sections
     map_kimage_region(
-        pgdir,
+        kernel_pgd,
         sym_pa(addr_of_mut!(__kernel_end)) + PAGE_SIZE as u64,
         sym_pa(addr_of_mut!(__stack_top)),
         prot,
@@ -123,7 +130,7 @@ fn map_kimage() -> PhysAddr {
     pr_info!(
         "kimage",
         "tables: root {:#X}, image VA {:#X} (Pgd {:#X}, Pud {}, Pmd {}, Pte {})",
-        pgdir,
+        kernel_pgd,
         first_va,
         Pgd::index(first_va),
         Pud::index(first_va),
@@ -135,7 +142,135 @@ fn map_kimage() -> PhysAddr {
         asm!("dsb ishst", options(nostack, preserves_flags));
     }
 
-    pgdir
+    kernel_pgd
+}
+
+/// Maps all of RAM into the linear map at `PAGE_OFFSET`, `phys_to_virt(pa)` -> `pa`, in the TTBR1 tables `root`.
+///
+/// The range is the DTB `/memory` one (`meminfo::ram_range`), mapped Normal write-back, inner shareable and never
+/// executable, with `map::map_range`. It is mapped exactly, never rounded up to a block: a block bigger than RAM would
+/// map non-RAM as cacheable Normal memory, which the CPU may speculatively read.
+///
+/// It is built as three disjoint ranges: the RAM below the image and the RAM above it, read/write for EL1, and the
+/// image's `.text` and `.rodata` (rounded out to pages), read-only. Nothing patches code, so the image's alias has no
+/// reason to be writable, which would defeat W^X. The split is also what keeps the option open: the alias lives in
+/// entries of its own (pages, plus any 2 MiB block that lies fully inside it), so its permissions can change later by
+/// rewriting those entries, without splitting a block that also covers other RAM. `map_range`'s largest-fit rule never
+/// lets a block cross the end of a range.
+///
+/// Only RAM is mapped here. MMIO belongs to `ioremap`, and an access to anything else through the linear range is a
+/// bug that faults, not something to demand-map.
+///
+/// TODO: exclude the DTB `no-map` reserved-memory regions. Plain reserved regions (kernel image, DTB, initrd) stay
+/// mapped.
+///
+/// # Arguments
+///
+/// * `root` - physical address of the TTBR1 Pgd table, the one `map_kimage` built
+fn map_linear(root: PhysAddr) {
+    // Get the ram range and align it to page boundary
+    let (ram_start, size) = meminfo::ram_range();
+    let ram_start = ram_start.align_up(PAGE_SIZE as u64);
+
+    // Rounding it up could map a partial page beyond what the DTB says is RAM.
+    let ram_end = (ram_start + size as u64).align_down(PAGE_SIZE as u64);
+
+    let text_start = sym_pa(addr_of_mut!(__text_start)).align_down(PAGE_SIZE as u64);
+    let rodata_end = sym_pa(addr_of_mut!(__rodata_end)).align_up(PAGE_SIZE as u64);
+
+    let mut prot = map::Prot {
+        ap: leaf::Ap::RwEl1,
+        mair: MairIdx::NormalWb,
+        sh: leaf::Shareability::Inner,
+        attrs: leaf::PXN | leaf::UXN | leaf::AF,
+    };
+
+    // 1. Map from ram_start to __text_start (before kernel image)
+    map_range(root, phys_to_virt(ram_start), ram_start, text_start - ram_start, prot);
+
+    // 2. Map from __rodata_end to ram_end (past kernel image)
+    map_range(root, phys_to_virt(rodata_end), rodata_end, ram_end - rodata_end, prot);
+
+    // 3. Map from __text_start to __rodata_end (kernel image)
+    prot.ap = leaf::Ap::RoEl1;
+    map_range(
+        root,
+        phys_to_virt(text_start),
+        text_start,
+        rodata_end - text_start,
+        prot,
+    );
+
+    unsafe {
+        asm!("dsb ishst", options(nostack, preserves_flags));
+    }
+}
+
+/// Compares the word at `pa` read through the identity map with the same word read through its linear alias.
+///
+/// Read-only, so it works on any RAM, including the read-only alias of `.text` and `.rodata`. `what` names the
+/// location in the panic message.
+fn check_linear_word(pa: PhysAddr, what: &str) {
+    let linear = phys_to_virt(pa).as_ptr::<u64>();
+    unsafe {
+        if pa.as_ptr::<u64>().read_volatile() != linear.read_volatile() {
+            panic!("check_linear_mapping: {what} differs between the physical address and the linear alias");
+        }
+    }
+}
+
+/// Checks that the linear map reaches the same frames as the identity map.
+///
+/// Must run after the MMU is on, `TTBR1` is loaded and `set_linear_map_live` has been called. First compares the word
+/// at the edges of the three ranges `map_linear` builds (the start of RAM, either side of the image, the end of RAM)
+/// through both addresses. Then takes a free frame, writes a value through its physical address and reads it back
+/// through `phys_to_virt(pa)`, and does the opposite. Reports the result with `pr_info!("linear", ...)`; a missing
+/// mapping shows up as a data abort instead of a mismatch.
+pub fn check_linear_mapping() {
+    let (ram_start, ram_size) = meminfo::ram_range();
+    let ram_end = ram_start + ram_size as u64;
+    let text_start = sym_pa(addr_of_mut!(__text_start)).align_down(PAGE_SIZE as u64);
+    let rodata_end = sym_pa(addr_of_mut!(__rodata_end)).align_up(PAGE_SIZE as u64);
+
+    check_linear_word(ram_start, "the start of RAM");
+    check_linear_word(text_start - 8, "the last word below the image");
+    check_linear_word(text_start, "the start of .text");
+    check_linear_word(rodata_end - 8, "the last word of the image alias");
+    check_linear_word(rodata_end, "the first word above the image");
+    check_linear_word(ram_end - 8, "the end of RAM");
+
+    let pa_frame = frame_alloc::alloc();
+    if pa_frame == PhysAddr::new(0) {
+        panic!("check_linear_mapping: out of frames");
+    }
+
+    unsafe {
+        let linear_frame = phys_to_virt(pa_frame).as_mut_ptr::<u64>();
+        if phys_ptr::<u64>(pa_frame) != linear_frame {
+            panic!("check_linear_mapping: phys_ptr does not return the linear alias after set_linear_map_live");
+        }
+
+        core::ptr::write_volatile(pa_frame.as_mut_ptr::<u64>(), 0xBEBECAFE);
+        if linear_frame.read_volatile() != 0xBEBECAFE {
+            panic!("check_linear_mapping: write through the physical address not seen through the linear alias");
+        }
+
+        if pa_frame.as_ptr::<u64>().read_volatile() != linear_frame.read_volatile() {
+            panic!("check_linear_mapping: frame differs between the physical address and linear map addresses");
+        }
+
+        core::ptr::write_volatile(linear_frame, 0xCAFEBEBE);
+        if pa_frame.as_ptr::<u64>().read_volatile() != linear_frame.read_volatile() {
+            panic!("check_linear_mapping: frame differs between the physical address and linear map addresses");
+        }
+    }
+
+    frame_alloc::free(pa_frame);
+
+    pr_info!(
+        "linear",
+        "read-back OK (range edges and a free frame via the identity and linear aliases)"
+    );
 }
 
 /// Checks that the high-half image mapping translates and reaches the same frames as the identity map.
@@ -258,10 +393,15 @@ pub fn setup_identity_mapping() {
     write_entry(idmap_pud_ptr, Pud::index(VirtAddr::new(ram_base)), pud_nwb);
 
     load_ttbr0(idmap_pgd_ptr);
-    load_ttbr1(map_kimage());
+    let kernel_pgd = map_kimage();
+    map_linear(kernel_pgd);
+    load_ttbr1(kernel_pgd);
 
     // We can now safely enable MMU
     enable_mmu();
+
+    // Turn on the linear map
+    set_linear_map_live();
 }
 
 /// Writes the Translation Control Register (TCR_EL1)

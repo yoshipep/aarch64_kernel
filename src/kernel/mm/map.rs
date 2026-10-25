@@ -16,7 +16,8 @@
 use crate::kernel::mm::frame_alloc;
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable::{
-    Descriptor, DescriptorType, LeafDescriptor, Pgd, Pmd, Pte, Pud, TableDescriptor, PAGE_SIZE, PMD_SIZE, PUD_SIZE,
+    phys_ptr, Descriptor, DescriptorType, LeafDescriptor, Pgd, Pmd, Pte, Pud, TableDescriptor, PAGE_SIZE, PMD_SIZE,
+    PUD_SIZE,
 };
 use crate::kernel::mm::pgtable_hwdef::leaf::{Ap, Shareability};
 use crate::kernel::mm::pgtable_hwdef::table;
@@ -54,7 +55,7 @@ pub struct Prot {
 /// The descriptor stored in that slot, valid or not.
 pub fn read_entry<D: Descriptor>(table: PhysAddr, index: usize) -> D {
     unsafe {
-        let slot = table.as_mut_ptr::<D>().add(index);
+        let slot = phys_ptr::<D>(table).add(index);
         slot.read_volatile()
     }
 }
@@ -71,7 +72,7 @@ pub fn read_entry<D: Descriptor>(table: PhysAddr, index: usize) -> D {
 /// * `desc` - the descriptor to store
 pub fn write_entry<D: Descriptor>(table: PhysAddr, index: usize, desc: D) {
     unsafe {
-        let slot = table.as_mut_ptr::<D>().add(index);
+        let slot = phys_ptr::<D>(table).add(index);
         core::ptr::write_volatile(slot, desc);
     }
 }
@@ -94,7 +95,7 @@ pub fn alloc_table() -> PhysAddr {
     }
 
     unsafe {
-        utilities::mem::memset(table.as_mut_ptr(), 0x0, PAGE_SIZE);
+        utilities::mem::memset(phys_ptr::<u8>(table), 0x0, PAGE_SIZE);
     }
 
     table

@@ -2,8 +2,8 @@
 //!
 //! `VirtAddr` is the counterpart of `PhysAddr` (see `phys_addr.rs`): one canonical type for an address that goes
 //! through the MMU, so a virtual address can't be passed where a physical one is expected, or the other way round.
-//! That is a real class of bug now that the kernel image has two virtual aliases (`kimage_va`) and the linear map is
-//! about to add a third.
+//! That is a real class of bug now that RAM has several virtual aliases: the identity map, the kernel image
+//! (`kimage_va`) and the linear map (`phys_to_virt`).
 //!
 //! Unlike `PhysAddr`, constructing one is checked: with a 48-bit virtual address space (`pgtable::VA_BITS`) only
 //! *canonical* addresses are valid, those whose bits `[63:VA_BITS]` (the top 16) are all equal: all zeros selects

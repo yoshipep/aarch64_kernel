@@ -6,8 +6,9 @@
 //! about to add a third.
 //!
 //! Unlike `PhysAddr`, constructing one is checked: with a 48-bit virtual address space (`pgtable::VA_BITS`) only
-//! *canonical* addresses are valid, those whose bits `[63:47]` are all equal (all zeros for the TTBR0 half, all ones
-//! for the TTBR1 half). Anything else always faults on access, so a non-canonical value is a bug at the point it is
+//! *canonical* addresses are valid, those whose bits `[63:VA_BITS]` (the top 16) are all equal: all zeros selects
+//! TTBR0, all ones selects TTBR1. Bit 47 is an ordinary index bit, not part of the check, so both halves have addresses
+//! with it set or clear. Anything else always faults on access, so a non-canonical value is a bug at the point it is
 //! created, not where it is finally used.
 
 use core::ops::{Add, Sub};
@@ -22,10 +23,12 @@ use crate::kernel::mm::pgtable::VA_BITS;
 pub struct VirtAddr(u64);
 
 impl VirtAddr {
-    /// Whether `addr` is canonical for a `VA_BITS`-bit address space: bits `[63:VA_BITS - 1]` all equal.
+    /// Whether `addr` is canonical for a `VA_BITS`-bit address space: bits `[63:VA_BITS]` all zeros (TTBR0 half) or
+    /// all ones (TTBR1 half). This is the check the hardware makes with `T0SZ = T1SZ = 64 - VA_BITS`, not the x86-64
+    /// rule of sign-extending from the top implemented bit.
     pub const fn is_canonical(addr: u64) -> bool {
-        let shift = u64::BITS - VA_BITS as u32;
-        ((addr as i64) << shift >> shift) as u64 == addr
+        let top = addr >> VA_BITS;
+        top == 0 || top == u64::MAX >> VA_BITS
     }
 
     /// Wraps a raw virtual address value.

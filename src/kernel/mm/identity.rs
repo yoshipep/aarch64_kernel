@@ -170,10 +170,10 @@ fn map_kimage() -> PhysAddr {
 fn map_linear(root: PhysAddr) {
     // Get the ram range and align it to page boundary
     let (ram_start, size) = meminfo::ram_range();
-    let ram_start = ram_start.align_up(PAGE_SIZE as u64);
-
     // Rounding it up could map a partial page beyond what the DTB says is RAM.
     let ram_end = (ram_start + size as u64).align_down(PAGE_SIZE as u64);
+
+    let ram_start = ram_start.align_up(PAGE_SIZE as u64);
 
     let text_start = sym_pa(addr_of_mut!(__text_start)).align_down(PAGE_SIZE as u64);
     let rodata_end = sym_pa(addr_of_mut!(__rodata_end)).align_up(PAGE_SIZE as u64);

@@ -2,6 +2,7 @@
 
 pub mod device;
 pub mod dtb;
+pub mod io_mem;
 pub mod irq;
 pub mod meminfo;
 pub mod mm;

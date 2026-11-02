@@ -228,7 +228,8 @@ fn check_linear_word(pa: PhysAddr, what: &str) {
 /// mapping shows up as a data abort instead of a mismatch.
 pub fn check_linear_mapping() {
     let (ram_start, ram_size) = meminfo::ram_range();
-    let ram_end = ram_start + ram_size as u64;
+    let ram_end = (ram_start + ram_size as u64).align_down(PAGE_SIZE as u64);
+    let ram_start = ram_start.align_up(PAGE_SIZE as u64);
     let text_start = sym_pa(addr_of_mut!(__text_start)).align_down(PAGE_SIZE as u64);
     let rodata_end = sym_pa(addr_of_mut!(__rodata_end)).align_up(PAGE_SIZE as u64);
 
@@ -260,6 +261,10 @@ pub fn check_linear_mapping() {
         }
 
         core::ptr::write_volatile(linear_frame, 0xCAFEBEBE);
+        if pa_frame.as_ptr::<u64>().read_volatile() != 0xCAFEBEBE {
+            panic!("check_linear_mapping: write through the linear alias not seen through the physical address");
+        }
+
         if pa_frame.as_ptr::<u64>().read_volatile() != linear_frame.read_volatile() {
             panic!("check_linear_mapping: frame differs between the physical address and linear map addresses");
         }

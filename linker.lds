@@ -46,6 +46,8 @@ SECTIONS {
         . += PAGE_SIZE;
         __idmap_l1 = .;
         . += PAGE_SIZE;
+        __kernel_pgd = .;
+        . += PAGE_SIZE;
         _bss_end = .;
     } > RAM
 

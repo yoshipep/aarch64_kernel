@@ -39,6 +39,21 @@ unsafe extern "C" {
     static mut __stack_top: u8;
 }
 
+unsafe extern "C" {
+    /// First byte of the page reserved in `.bss` by `linker.lds` for the kernel (TTBR1) root table. It is zero when
+    /// the kernel starts, because the bootloader zeroes `.bss` on load.
+    static mut __kernel_pgd: u8;
+}
+
+/// Physical address of the kernel (TTBR1) root table.
+///
+/// The root is a page of the image (`__kernel_pgd` in `.bss`), not an allocated frame, so it is known without any
+/// state being stored, like Linux's `swapper_pg_dir`. `map_kimage` fills it, `load_ttbr1` installs it, and `ioremap`
+/// adds its own entries to it later.
+fn kernel_pgd() -> PhysAddr {
+    sym_pa(addr_of_mut!(__kernel_pgd))
+}
+
 /// Physical address of a linker symbol. The kernel is linked at its physical load address, so the symbol's value is
 /// already its PA.
 fn sym_pa(sym: *mut u8) -> PhysAddr {
@@ -65,12 +80,13 @@ fn map_kimage_region(root: PhysAddr, start: PhysAddr, end: PhysAddr, prot: map::
 
 /// Builds the TTBR1 page tables that map the kernel image at `KIMAGE_VADDR`, and returns the root table.
 ///
-/// Allocates and zeroes a Pgd, then maps each region with `map::map_range` (largest block that fits) and its own
-/// permissions: `.text` read-only and executable by EL1, `.rodata` read-only, `.data`/`.bss` and the stack read-write,
-/// all non-executable. Each region is rounded outwards to whole pages first. The page
-/// between `__kernel_end` and the stack is left unmapped as a guard page. Runs with the MMU off, so tables are written
-/// through physical addresses. Ends with a `dsb ishst` so the table writes are complete before the root is published
-/// by `load_ttbr1`.
+/// The Pgd is the page of the image reserved for it (`kernel_pgd()`), which is already zero because the bootloader
+/// zeroes `.bss`; the lower-level tables are allocated frames. Each region is mapped with `map::map_range` (largest
+/// block that fits) and its own permissions: `.text` read-only and executable by EL1, `.rodata` read-only,
+/// `.data`/`.bss` and the stack read-write, all non-executable. Each region is rounded outwards to whole pages first.
+/// The page between `__kernel_end` and the stack is left unmapped as a guard page. Runs with the MMU off, so tables
+/// are written through physical addresses. Ends with a `dsb ishst` so the table writes are complete before the root
+/// is published by `load_ttbr1`.
 ///
 /// # Returns
 ///
@@ -78,9 +94,9 @@ fn map_kimage_region(root: PhysAddr, start: PhysAddr, end: PhysAddr, prot: map::
 ///
 /// # Panics
 ///
-/// If the frame allocator runs out of pages for the tables.
+/// If the frame allocator runs out of pages for the lower-level tables.
 fn map_kimage() -> PhysAddr {
-    let kernel_pgd = map::alloc_table();
+    let kernel_pgd = kernel_pgd();
 
     // 1. Build the walk for text pages
     let mut prot = map::Prot {

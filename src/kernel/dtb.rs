@@ -45,8 +45,7 @@ const MAX_HANDLES: usize = 32;
 static mut DEVICE_COUNT: usize = 0;
 
 /// Flat table of all devices discovered from the DTB
-static mut DEVICE_TABLE: [device::PlatformDevice; MAX_DEVICES] =
-    [device::PlatformDevice::new(); MAX_DEVICES];
+static mut DEVICE_TABLE: [device::PlatformDevice; MAX_DEVICES] = [device::PlatformDevice::new(); MAX_DEVICES];
 
 /// Number of phandle mappings registered
 static mut PHANDLE_COUNT: usize = 0;
@@ -165,8 +164,7 @@ pub fn parse_dtb(dtb: PhysAddr) {
                 prop_id = 0;
                 if stack_depth > 0 {
                     unsafe {
-                        device.parent =
-                            &DEVICE_TABLE[stack[stack_depth - 1]] as *const device::PlatformDevice;
+                        device.parent = &DEVICE_TABLE[stack[stack_depth - 1]] as *const device::PlatformDevice;
                     }
                 }
 
@@ -208,8 +206,7 @@ pub fn parse_dtb(dtb: PhysAddr) {
                 // Get the name of the property
                 off += 8;
                 let mut prop = device::Property::default();
-                prop.name =
-                    get_property_name(dtb, header.off_dt_strings as usize, prop_header.nameoff);
+                prop.name = get_property_name(dtb, header.off_dt_strings as usize, prop_header.nameoff);
                 prop.len = prop_header.len as usize;
                 prop.value = (structure_block + off) as *const u8;
 
@@ -271,9 +268,7 @@ pub fn find_device_by_phandle(phandle: u32) -> Option<&'static device::PlatformD
 /// # Returns
 ///
 /// `Some(device)` for the interrupt controller if one was found, `None` otherwise.
-pub fn find_interrupt_parent(
-    dev: &device::PlatformDevice,
-) -> Option<&'static device::PlatformDevice> {
+pub fn find_interrupt_parent(dev: &device::PlatformDevice) -> Option<&'static device::PlatformDevice> {
     unsafe {
         let mut current = dev.parent as *const device::PlatformDevice;
         while current != core::ptr::null() {

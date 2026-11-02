@@ -8,8 +8,9 @@
 //!
 //! The parser walks the DTB structure block token by token, building a flat device table. Each DTB node becomes a
 //! `PlatformDevice` entry with its properties stored directly in the table. A depth stack tracks parent-child
-//! relationships. After parsing, `init_devices` matches discovered devices against the configured driver table and
-//! calls their setup functions.
+//! relationships. After parsing, `init_mem` registers the `memory` node, which the frame allocator needs right away.
+//! The rest of the devices are matched against the configured driver table and set up later by `init_devices`, once
+//! the MMU and the linear map are up (so drivers can map their registers).
 //!
 //! ## Initialization Order
 //!
@@ -135,8 +136,8 @@ fn get_property_name(dtb_addr: usize, off_dt_strings: usize, offset: u32) -> &'s
 ///
 /// Walks the DTB structure block token by token, creating a `PlatformDevice` for each node and storing its properties
 /// in the global `DEVICE_TABLE`. A depth stack tracks parent-child relationships so each device can reference its
-/// parent. After parsing, calls `init_devices` to match discovered devices against the driver table and initialize
-/// them.
+/// parent. After parsing, calls `init_mem` so the RAM range is known to `meminfo`. The other devices are not set up
+/// here: the caller runs `init_devices` once the MMU and the linear map are up.
 ///
 /// # Arguments
 ///
@@ -239,7 +240,8 @@ pub fn parse_dtb(dtb: PhysAddr) {
             }
         }
     }
-    init_devices();
+
+    init_mem();
 }
 
 /// Find a device by its phandle value
@@ -336,12 +338,19 @@ fn node_matches(dev: &device::PlatformDevice, criteria: device::MatchCriteria) -
 ///
 /// Runs in two passes:
 /// 1. First initializes the GIC (interrupt controller), since other devices depend on it to configure their interrupts
-/// 2. Then initializes all remaining devices (UART, timer, memory, etc.)
+/// 2. Then initializes all remaining devices (UART, timer, etc.)
+///
+/// The `memory` node is skipped: `parse_dtb` already handled it through `init_mem`. Must be called after the MMU and
+/// the linear map are up, since drivers need them to reach their registers.
 pub fn init_devices() {
     unsafe {
         // First pass: initialize GIC (interrupt controller must be ready before other devices)
         for i in 0..DEVICE_COUNT {
             let dev = &DEVICE_TABLE[i];
+            if node_matches(dev, device::MatchCriteria::DeviceType("memory")) {
+                continue;
+            }
+
             if node_matches(dev, device::MatchCriteria::Compatible("arm,gic-v3")) {
                 for match_entry in &device::CONFIGURED_DEVICES {
                     if node_matches(dev, match_entry.criteria) {
@@ -355,7 +364,31 @@ pub fn init_devices() {
         // Second pass: initialize all other devices
         for i in 0..DEVICE_COUNT {
             let dev = &DEVICE_TABLE[i];
+            if node_matches(dev, device::MatchCriteria::DeviceType("memory")) {
+                continue;
+            }
+
             if !node_matches(dev, device::MatchCriteria::Compatible("arm,gic-v3")) {
+                for match_entry in &device::CONFIGURED_DEVICES {
+                    if node_matches(dev, match_entry.criteria) {
+                        (match_entry.setup_fn)(dev);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Registers the `memory` node(s) by running their setup function from the driver table
+///
+/// Called by `parse_dtb`, because `meminfo` must know the RAM range before `frame_alloc::init`, which runs long before
+/// the MMU is on and `init_devices` can run.
+fn init_mem() {
+    unsafe {
+        for i in 0..DEVICE_COUNT {
+            let dev = &DEVICE_TABLE[i];
+            if node_matches(dev, device::MatchCriteria::DeviceType("memory")) {
                 for match_entry in &device::CONFIGURED_DEVICES {
                     if node_matches(dev, match_entry.criteria) {
                         (match_entry.setup_fn)(dev);

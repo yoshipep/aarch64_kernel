@@ -18,7 +18,8 @@
 //!
 //! 1. Define a static match table with `DeviceMatch` entries
 //! 2. During DTB parsing, collect properties into `PlatformDevice`
-//! 3. Check the property named by each entry's `MatchCriteria` against the match table
+//! 3. For each `Stage`, in order, check the property named by each of its entries' `MatchCriteria` against every
+//!    collected device
 //! 4. If matched, call the corresponding `setup_fn`
 
 use crate::drivers::gic::gicv3;
@@ -150,10 +151,26 @@ pub enum MatchCriteria {
     DeviceType(&'static str),
 }
 
+/// Phase of boot at which a driver's `setup_fn` runs; the stages are run in declaration order by `dtb.rs`.
+///
+/// Stands in for Linux's initcall levels (`core_initcall`, `arch_initcall`, `device_initcall`, ...): the order is
+/// decided at build time by the driver table, with no allocation. It cannot express a dependency between two drivers of
+/// the same stage, nor resolve one from the DTB (Linux does that with `of_irq_init`'s parent-first ordering and
+/// deferred probing, which need an allocator).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// RAM description; needed before the frame allocator and the MMU.
+    Memory,
+    /// Interrupt controllers; other devices configure their interrupts through them.
+    IrqChip,
+    /// Everything else (UART, timer, ...).
+    Device,
+}
+
 /// Entry in the device match table.
 ///
 /// Combines matching criteria with setup function (unlike Linux which separates `of_device_id`
-/// and `platform_driver`). During DTB parsing, each entry's `criteria` is checked against the
+/// and `platform_driver`). When the entry's `stage` runs, its `criteria` is checked against the
 /// matching property of every discovered node; on match, `setup_fn` is called with the collected
 /// device properties.
 pub struct DeviceMatch {
@@ -161,6 +178,8 @@ pub struct DeviceMatch {
     pub criteria: MatchCriteria,
     /// Function to call when a matching device is found
     pub setup_fn: fn(&PlatformDevice),
+    /// Boot stage at which `setup_fn` runs
+    pub stage: Stage,
 }
 
 /// Table of supported devices, matched against DTB nodes during initialization
@@ -168,17 +187,21 @@ pub static CONFIGURED_DEVICES: [DeviceMatch; 4] = [
     DeviceMatch {
         criteria: MatchCriteria::Compatible("arm,gic-v3"),
         setup_fn: gicv3::setup,
+        stage: Stage::IrqChip,
     },
     DeviceMatch {
         criteria: MatchCriteria::Compatible("arm,pl011"),
         setup_fn: pl011::setup,
+        stage: Stage::Device,
     },
     DeviceMatch {
         criteria: MatchCriteria::Compatible("arm,armv7-timer"),
         setup_fn: arch_timer::setup,
+        stage: Stage::Device,
     },
     DeviceMatch {
         criteria: MatchCriteria::DeviceType("memory"),
         setup_fn: meminfo::setup,
+        stage: Stage::Memory,
     },
 ];

@@ -8,19 +8,24 @@
 //!
 //! The parser walks the DTB structure block token by token, building a flat device table. Each DTB node becomes a
 //! `PlatformDevice` entry with its properties stored directly in the table. A depth stack tracks parent-child
-//! relationships. After parsing, `init_mem` registers the `memory` node, which the frame allocator needs right away.
-//! The rest of the devices are matched against the configured driver table and set up later by `init_devices`, once
-//! the MMU and the linear map are up (so drivers can map their registers).
+//! relationships. After parsing, the `Memory` stage registers the `memory` node, which the frame allocator needs right
+//! away. The rest of the devices are matched against the configured driver table and set up later by `init_devices`,
+//! once the MMU and the linear map are up (so drivers can map their registers).
 //!
 //! ## Initialization Order
 //!
-//! Device initialization is done in two passes: 1. **First pass**: Initialize the interrupt controller (GIC), since
-//! other devices need it to configure their interrupts 2. **Second pass**: Initialize all remaining devices (UART,
-//! timer, etc.)
+//! Every driver in the match table has a `device::Stage`, and the stages are run in declaration order:
+//!
+//! 1. **`Memory`**: the `memory` node, run at the end of `parse_dtb` because the frame allocator needs the RAM range.
+//! 2. **`IrqChip`**: the interrupt controller (GIC), since other devices need it to configure their interrupts.
+//! 3. **`Device`**: all remaining devices (UART, timer, etc.).
+//!
+//! Stages 2 and 3 are run by `init_devices`. A stage is a build-time ordering like Linux's initcall levels: it cannot
+//! order two drivers of the same stage, nor resolve a dependency from the DTB.
 
 use core;
 
-use crate::kernel::device;
+use crate::kernel::device::{self, Stage};
 use crate::kernel::phys_addr::PhysAddr;
 use crate::utilities::convert;
 
@@ -135,8 +140,8 @@ fn get_property_name(dtb_addr: usize, off_dt_strings: usize, offset: u32) -> &'s
 ///
 /// Walks the DTB structure block token by token, creating a `PlatformDevice` for each node and storing its properties
 /// in the global `DEVICE_TABLE`. A depth stack tracks parent-child relationships so each device can reference its
-/// parent. After parsing, calls `init_mem` so the RAM range is known to `meminfo`. The other devices are not set up
-/// here: the caller runs `init_devices` once the MMU and the linear map are up.
+/// parent. After parsing, runs the `Memory` stage so the RAM range is known to `meminfo`. The other devices are not
+/// set up here: the caller runs `init_devices` once the MMU and the linear map are up.
 ///
 /// # Arguments
 ///
@@ -238,7 +243,7 @@ pub fn parse_dtb(dtb: PhysAddr) {
         }
     }
 
-    init_mem();
+    init_stage(Stage::Memory);
 }
 
 /// Find a device by its phandle value
@@ -329,70 +334,37 @@ fn node_matches(dev: &device::PlatformDevice, criteria: device::MatchCriteria) -
         .is_some_and(|prop| compatible_matches(prop, target))
 }
 
-/// Initializes all discovered devices by matching against the driver table
+/// Runs the setup function of every driver in `stage` over the devices that match it
 ///
-/// Runs in two passes:
-/// 1. First initializes the GIC (interrupt controller), since other devices depend on it to configure their interrupts
-/// 2. Then initializes all remaining devices (UART, timer, etc.)
+/// Drivers are visited in table order and, for each, every discovered device is checked against its criteria, so a
+/// driver whose `compatible` matches several nodes is set up once per node. Unlike the per-device loop it replaces,
+/// there is no `break` after the first match: two table entries claiming the same node would both run.
 ///
-/// The `memory` node is skipped: `parse_dtb` already handled it through `init_mem`. Must be called after the MMU and
-/// the linear map are up, since drivers need them to reach their registers.
-pub fn init_devices() {
+/// # Arguments
+///
+/// * `stage` - the stage whose drivers are set up
+fn init_stage(stage: Stage) {
     unsafe {
-        // First pass: initialize GIC (interrupt controller must be ready before other devices)
-        for i in 0..DEVICE_COUNT {
-            let dev = &DEVICE_TABLE[i];
-            if node_matches(dev, device::MatchCriteria::DeviceType("memory")) {
-                continue;
-            }
-
-            if node_matches(dev, device::MatchCriteria::Compatible("arm,gic-v3")) {
-                for match_entry in &device::CONFIGURED_DEVICES {
-                    if node_matches(dev, match_entry.criteria) {
-                        (match_entry.setup_fn)(dev);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Second pass: initialize all other devices
-        for i in 0..DEVICE_COUNT {
-            let dev = &DEVICE_TABLE[i];
-            if node_matches(dev, device::MatchCriteria::DeviceType("memory")) {
-                continue;
-            }
-
-            if !node_matches(dev, device::MatchCriteria::Compatible("arm,gic-v3")) {
-                for match_entry in &device::CONFIGURED_DEVICES {
-                    if node_matches(dev, match_entry.criteria) {
-                        (match_entry.setup_fn)(dev);
-                        break;
-                    }
+        for entry in device::CONFIGURED_DEVICES.iter().filter(|e| e.stage == stage) {
+            for dev in &DEVICE_TABLE[..DEVICE_COUNT] {
+                if node_matches(dev, entry.criteria) {
+                    (entry.setup_fn)(dev);
                 }
             }
         }
     }
 }
 
-/// Registers the `memory` node(s) by running their setup function from the driver table
+/// Initializes all discovered devices by matching against the driver table
 ///
-/// Called by `parse_dtb`, because `meminfo` must know the RAM range before `frame_alloc::init`, which runs long before
-/// the MMU is on and `init_devices` can run.
-fn init_mem() {
-    unsafe {
-        for i in 0..DEVICE_COUNT {
-            let dev = &DEVICE_TABLE[i];
-            if node_matches(dev, device::MatchCriteria::DeviceType("memory")) {
-                for match_entry in &device::CONFIGURED_DEVICES {
-                    if node_matches(dev, match_entry.criteria) {
-                        (match_entry.setup_fn)(dev);
-                        break;
-                    }
-                }
-            }
-        }
-    }
+/// Runs the stages in order: first the interrupt controller (`Stage::IrqChip`), since other devices depend on it to
+/// configure their interrupts, then the remaining devices (`Stage::Device`: UART, timer, etc.).
+///
+/// The `memory` node belongs to `Stage::Memory`, which `parse_dtb` already ran. Must be called after the MMU and the
+/// linear map are up, since drivers need them to reach their registers.
+pub fn init_devices() {
+    init_stage(Stage::IrqChip);
+    init_stage(Stage::Device);
 }
 
 /// Returns the total size in bytes of the DTB blob at `dtb_addr`, read from its own FDT header.

@@ -452,7 +452,7 @@ fn enable_mmu() {
             | tcr::ORGN1_WBWA
             | tcr::SH1_INNER
             | tcr::TG1_4K
-            | tcr::IPS_44,
+            | tcr::IPS_44, // Must match `PA_BITS` in pgtable.rs
     );
     unsafe {
         asm!(

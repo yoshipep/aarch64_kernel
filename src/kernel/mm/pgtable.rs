@@ -30,6 +30,13 @@ pub const PAGE_OFFSET: u64 = u64::MAX << VA_BITS;
 // output side of translation and diverges from VA_BITS under LPA2 (52-bit). 4KB granule, non-LPA2.
 const OA_BITS: usize = 48;
 
+/// Physical address size the MMU is configured for (`TCR_EL1.IPS`, `tcr::IPS_44`): 44 bits, 16 TiB. A translation to an
+/// address above it takes an address-size fault, even though the descriptor's output-address field (`OA_BITS`) is
+/// wider. Must match the `IPS` value written in `identity.rs`.
+// TODO: Don't hard-code it. Read `ID_AA64MMFR0_EL1.PARange` at boot (44 bits is what the Cortex-A57 that QEMU emulates
+// reports), derive `TCR_EL1.IPS` and this value from it.
+pub const PA_BITS: usize = 44;
+
 /// log2 of the page size (4 KiB granule).
 pub const PAGE_SHIFT: usize = 12;
 
@@ -48,6 +55,13 @@ pub const TABLE_SHIFT: usize = PTRS_PER_TABLE.ilog2() as usize;
 /// Mask of the output-address field in a descriptor: bits \[47:12\], i.e. `OA_BITS` wide and page-aligned. The bits
 /// above and below hold attributes.
 pub const ADDR_MASK: u64 = ((1u64 << OA_BITS) - 1) & !(PAGE_SIZE as u64 - 1);
+
+/// Bit position of the Pgd index in a virtual address (39); same value as `Pgd::SHIFT`.
+pub const PGD_SHIFT: usize = Pgd::SHIFT;
+
+/// Bytes covered by one Pgd entry (512 GiB): the span of the Pud table it points to. A Pgd entry can only be a `Table`
+/// with this granule, so it is the unit the top-level regions of the address space (image, `ioremap`) are laid out in.
+pub const PGD_SIZE: usize = 1 << PGD_SHIFT;
 
 /// Bit position of the Pud index in a virtual address (30); same value as `Pud::SHIFT`.
 pub const PUD_SHIFT: usize = Pud::SHIFT;

@@ -36,6 +36,7 @@ pub extern "C" fn kmain(dtb_addr: PhysAddr) {
     mm::setup_identity_mapping();
     mm::check_kimage_mapping();
     mm::check_linear_mapping();
+    mm::check_ioremap();
     dtb::init_devices();
 
     println!("Hello, from Rust");

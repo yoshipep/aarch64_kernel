@@ -2,10 +2,12 @@
 
 pub mod frame_alloc;
 pub mod identity;
+pub mod ioremap;
 pub mod mair;
 pub mod map;
 pub mod pgtable;
 pub mod pgtable_hwdef;
 
 pub use identity::{check_kimage_mapping, check_linear_mapping, setup_identity_mapping};
+pub use ioremap::check_ioremap;
 pub use mair::setup_mair_ranges;

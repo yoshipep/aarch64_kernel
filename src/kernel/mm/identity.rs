@@ -50,7 +50,7 @@ unsafe extern "C" {
 /// The root is a page of the image (`__kernel_pgd` in `.bss`), not an allocated frame, so it is known without any
 /// state being stored, like Linux's `swapper_pg_dir`. `map_kimage` fills it, `load_ttbr1` installs it, and `ioremap`
 /// adds its own entries to it later.
-fn kernel_pgd() -> PhysAddr {
+pub fn kernel_pgd() -> PhysAddr {
     sym_pa(addr_of_mut!(__kernel_pgd))
 }
 
@@ -387,6 +387,7 @@ pub fn setup_identity_mapping() {
 
     // 3.1 Set attributes
     pud_dev.set_attrs(leaf::UXN | leaf::PXN | leaf::AF);
+    // SH is ignored for Device memory: it is always Outer Shareable (Arm ARM D8.6, "Stage 1 Shareability attributes")
     pud_dev.set_shareability(leaf::Shareability::NonShareable);
     pud_dev.set_ap(leaf::Ap::RwEl1);
 

@@ -26,6 +26,9 @@ use crate::drivers::gic::gicv3;
 use crate::ipc::irq_safe_mutex::Mutex;
 use crate::kernel::device;
 use crate::kernel::dtb;
+use crate::kernel::io_mem::IoMem;
+use crate::kernel::mm::ioremap;
+use crate::kernel::phys_addr::PhysAddr;
 use crate::utilities::convert;
 use crate::utilities::mmio;
 
@@ -89,8 +92,9 @@ impl UartBuffer {
 // In C: volatile uint8_t *uart = ...
 /// A struct holding the configuration and state of the PL011 UART device
 struct UartPl011 {
-    /// The base memory mapped address of the UART registers
-    base_addr: *mut u32,
+    /// The mapped register block, `None` until `setup` has called `ioremap`. Until then the early console writes to
+    /// `EARLY_BASE` instead.
+    iobase: Option<IoMem>,
     /// The base clock frequency of the UART peripheral
     base_clock: u32,
     /// The configured baud rate
@@ -189,7 +193,7 @@ impl UartPl011 {
     /// Const constructor for static initialization
     pub const fn new() -> Self {
         Self {
-            base_addr: core::ptr::null_mut(),
+            iobase: None,
             base_clock: 0,
             baudrate: 115200,
             data_bits: 8,
@@ -201,24 +205,35 @@ impl UartPl011 {
     ///
     /// # Arguments
     ///
-    /// * `base_addr` - MMIO base address of the UART's register block
+    /// * `iobase` - the UART's register block, as mapped by `ioremap`
     /// * `base_clock` - input clock frequency (Hz) driving the UART, used by `set_speed` to compute the baud-rate
     ///   divisor
-    pub fn init(&mut self, base_addr: *mut u32, base_clock: u32) {
-        self.base_addr = base_addr;
+    pub fn init(&mut self, iobase: IoMem, base_clock: u32) {
+        self.iobase = Some(iobase);
         self.base_clock = base_clock;
+    }
+
+    /// Returns the mapped register block.
+    ///
+    /// # Panics
+    ///
+    /// If the UART has not been initialized yet (`init` not called).
+    fn iobase(&self) -> IoMem {
+        self.iobase.expect("pl011: used before init")
     }
 
     /// Configure the UART hardware registers
     pub fn configure(&self) {
+        let iobase = self.iobase();
+
         // 1. Disable the UART
-        mmio::write_mmio32(self.base_addr as usize, reg::CR, 0);
+        iobase.write32(reg::CR, 0);
 
         // 2. Wait for the end of TX
-        while (mmio::read_mmio32(self.base_addr as usize, reg::FR) & fr::BUSY) != 0 {}
+        while (iobase.read32(reg::FR) & fr::BUSY) != 0 {}
 
         // 3. Flush RX/TX fifos
-        mmio::clear_mmio_bits32(self.base_addr as usize, reg::LCR_H, lcr_h::FEN);
+        iobase.clear_bits32(reg::LCR_H, lcr_h::FEN);
 
         // 4. Set speed
         self.set_speed();
@@ -240,59 +255,56 @@ impl UartPl011 {
 
         // 6. Enable FIFOs
         lcr_val |= lcr_h::FEN;
-        mmio::write_mmio32(self.base_addr as usize, reg::LCR_H, lcr_val);
+        iobase.write32(reg::LCR_H, lcr_val);
 
         // 7. Enable RX interrupt
-        mmio::set_mmio_bits32(self.base_addr as usize, reg::IMSC, int::RX);
+        iobase.set_bits32(reg::IMSC, int::RX);
 
         // 8. Disable DMA (RXDMAE/TXDMAE cleared; 0 is also the reset value)
-        mmio::write_mmio32(self.base_addr as usize, reg::DMACR, 0);
+        iobase.write32(reg::DMACR, 0);
 
         // 9. Enable TX, RX and UART (TXE+UARTEN required to transmit, RXE+UARTEN to receive)
-        mmio::set_mmio_bits32(
-            self.base_addr as usize,
-            reg::CR,
-            cr::UARTEN | cr::TXE | cr::RXE,
-        );
+        iobase.set_bits32(reg::CR, cr::UARTEN | cr::TXE | cr::RXE);
     }
 
     /// Set baud rate divisor registers
     fn set_speed(&self) {
+        let iobase = self.iobase();
         let baud_div = 4 * self.base_clock / self.baudrate;
 
-        mmio::write_mmio32(
-            self.base_addr as usize,
-            reg::IBRD,
-            (baud_div >> baud::FRAC_BITS) & baud::INT_MASK,
-        );
-
-        mmio::write_mmio32(
-            self.base_addr as usize,
-            reg::FBRD,
-            baud_div & baud::FRAC_MASK,
-        );
+        iobase.write32(reg::IBRD, (baud_div >> baud::FRAC_BITS) & baud::INT_MASK);
+        iobase.write32(reg::FBRD, baud_div & baud::FRAC_MASK);
     }
 
     /// Write a single byte
     ///
-    /// If the UART has not been initialized yet (base address is null), falls back to the early console base address.
+    /// If the UART has not been initialized yet (no register block mapped), falls back to the early console base
+    /// address, which only works while the identity map exists.
     pub fn putchar(&self, c: u8) {
-        let base = if self.base_addr.is_null() {
-            EARLY_BASE
-        } else {
-            self.base_addr as usize
-        };
+        match self.iobase {
+            Some(io) => {
+                while (io.read32(reg::FR) & fr::TXFF) != 0 {}
 
-        while (mmio::read_mmio32(base, reg::FR) & fr::TXFF) != 0 {}
+                io.write32(reg::DR, c as u32);
+            }
+            None => {
+                while (mmio::read_mmio32(EARLY_BASE, reg::FR) & fr::TXFF) != 0 {}
 
-        mmio::write_mmio32(base, reg::DR, c as u32);
+                mmio::write_mmio32(EARLY_BASE, reg::DR, c as u32);
+            }
+        }
     }
 }
 
 /// Initializes the global UART struct with hardware-specific details
-fn init_uart(base_addr: *mut u32, base_clock: u32) {
+///
+/// # Arguments
+///
+/// * `iobase` - the UART's register block, as mapped by `ioremap`
+/// * `base_clock` - input clock frequency (Hz) driving the UART
+fn init_uart(iobase: IoMem, base_clock: u32) {
     unsafe {
-        (*addr_of_mut!(UART)).init(base_addr, base_clock);
+        (*addr_of_mut!(UART)).init(iobase, base_clock);
     }
 }
 
@@ -328,20 +340,19 @@ pub fn getchar() -> Option<u8> {
 /// Drains the pending RX byte into the buffer and clears the RX interrupt
 ///
 /// Called from the UART IRQ handler; keeps all PL011 register access inside the driver.
+///
+/// # Panics
+///
+/// If the UART has not been initialized (an RX interrupt can't arrive before `setup` has configured it).
 pub fn handle_rx_interrupt() {
-    let base = get_base_addr();
+    let base = unsafe { (*addr_of_mut!(UART)).iobase() };
 
     RX_BUFFER.lock_irqsafe(|rx| {
-        let ch = mmio::read_mmio32(base, reg::DR) as u8;
+        let ch = base.read32(reg::DR) as u8;
         let _ = rx.push(ch);
     });
 
-    mmio::write_mmio32(base, reg::ICR, int::RX);
-}
-
-/// Returns the UART base address
-pub fn get_base_addr() -> usize {
-    unsafe { (*addr_of_mut!(UART)).base_addr as usize }
+    base.write32(reg::ICR, int::RX);
 }
 
 /// Zero-sized writer that implements `core::fmt::Write` for the PL011 UART
@@ -352,6 +363,7 @@ impl core::fmt::Write for UartWriter {
         for &c in s.as_bytes() {
             putchar(c);
         }
+
         Ok(())
     }
 }
@@ -387,24 +399,36 @@ macro_rules! println {
 /// Sets up the PL011 UART from device tree properties
 ///
 /// Parses the device's DTB properties to extract:
-/// - Base address from the `reg` property
+/// - Base address and size from the `reg` property, and maps that block with `ioremap` (panics if there is no `reg`
+///   or the mapping fails: without it the UART can't work)
 /// - Interrupt configuration from the `interrupts` property (configures as SPI in the GIC)
 /// - Clock frequency from the `clocks` property (follows phandle to clock node)
 ///
 /// After extracting these values, initializes and configures the UART hardware.
 pub fn setup(dev: &device::PlatformDevice) {
     let mut addr: u64 = 0;
+    let mut size: u64 = 0;
     let mut freq: u32 = 0;
     let mut interrupt_info: [u32; gicv3::MAX_INTERRUPT_CELLS] = [0; gicv3::MAX_INTERRUPT_CELLS];
-    // Get #address-cells from parent (size_cells not needed for UART)
-    let (addr_cells, _) = dev.get_parent_cells();
+    // Get #address-cells from parent
+    let (addr_cells, size_cells) = dev.get_parent_cells();
     // Parse reg property for base address
-    if let Some(reg_prop) = dev.find_property("reg") {
-        for i in 0..addr_cells as usize {
-            let cell = convert::read_be_u32(reg_prop.value, i * 4);
-            addr = (addr << 32) | cell as u64;
-        }
+    let Some(reg_prop) = dev.find_property("reg") else {
+        panic!("pl011: no reg property");
+    };
+
+    for i in 0..addr_cells as usize {
+        let cell = convert::read_be_u32(reg_prop.value, i * 4);
+        addr = (addr << 32) | cell as u64;
     }
+
+    for i in addr_cells..addr_cells + size_cells {
+        let cell = convert::read_be_u32(reg_prop.value, i as usize * 4);
+        size = (size << 32) | cell as u64;
+    }
+
+    let ioaddr =
+        ioremap::ioremap(PhysAddr::new(addr), size as usize).expect("pl011: ioremap of the register block failed");
 
     // Parse interrupts property
     if let Some(int_prop) = dev.find_property("interrupts") {
@@ -450,6 +474,6 @@ pub fn setup(dev: &device::PlatformDevice) {
         }
     }
 
-    init_uart(addr as *mut u32, freq);
+    init_uart(ioaddr, freq);
     configure_uart();
 }

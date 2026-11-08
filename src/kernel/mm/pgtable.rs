@@ -171,12 +171,21 @@ pub trait TableDescriptor: Descriptor {
         self.set_output_address(table_pa);
     }
 
+    /// Returns whether the descriptor is a `Table`, i.e. its type field (bits \[1:0\]) is `0b11`.
+    ///
+    /// False for an invalid entry, for a `Block` (`0b01`) and for the reserved encoding (`0b10`), so a true result
+    /// also means the entry is valid.
+    #[inline]
+    fn is_table(&self) -> bool {
+        self.raw() & Self::DESC_TYPE_MASK == DescriptorType::Table as u64
+    }
+
     /// Returns the physical address of the next-level table this descriptor points to.
     ///
     /// Only meaningful for a valid `Table` descriptor; checked with a `debug_assert!`.
     #[inline]
     fn next_table(&self) -> PhysAddr {
-        debug_assert!(self.is_valid() && self.raw() & 0b11 == 0b11);
+        debug_assert!(self.is_table());
         self.output_address()
     }
 }
@@ -188,6 +197,16 @@ pub trait LeafDescriptor: Descriptor {
 
     /// The type field a leaf at this level carries: `Block` at Pud and Pmd, `Page` at Pte
     const LEAF_TYPE: DescriptorType;
+
+    /// Returns whether the descriptor is a `Block`, i.e. its type field (bits \[1:0\]) is `0b01`.
+    ///
+    /// Only a Pud or Pmd entry can be a block. False for an invalid entry, for a table or page (`0b11`) and for the
+    /// reserved encoding (`0b10`), so a true result also means the entry is valid. On a `Pte` the block encoding is
+    /// reserved, so this is not the way to ask whether a page is mapped (use `is_valid`).
+    #[inline]
+    fn is_block(&self) -> bool {
+        self.raw() & Self::DESC_TYPE_MASK == DescriptorType::Block as u64
+    }
 
     /// Sets the AttrIndx field (bits \[4:2\]) to the given MAIR_EL1 slot
     #[inline]

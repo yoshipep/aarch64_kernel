@@ -144,6 +144,70 @@ pub fn alloc_va(size: usize) -> Result<VirtAddr, IoremapError> {
     })
 }
 
+/// Releases a range reserved by `alloc_va`, so its addresses (and its guard page) can be handed out again.
+///
+/// Finds the area that starts at `start` and empties its slot, under the same lock as `alloc_va`. It returns the size
+/// of the area, which the caller can check against the size it unmapped. This only releases addresses; the pages must
+/// already be unmapped and the TLB invalidated, because once the slot is free another `ioremap` can be given the same
+/// range.
+///
+/// # Arguments
+///
+/// * `start` - the page-aligned address `alloc_va` returned (the start of the area, not of the `IoMem`, which may
+///   carry a sub-page offset)
+///
+/// # Returns
+///
+/// The size in bytes of the area that was released, not counting its guard page.
+///
+/// # Panics
+///
+/// If no area starts at `start`: a double free or an address that never came from `alloc_va` is a kernel bug.
+pub fn free_va(start: VirtAddr) -> usize {
+    AREAS.lock_irqsafe(|areas| {
+        for slot in areas.iter_mut() {
+            if let Some(area) = slot {
+                if area.start == start {
+                    let size = area.size;
+                    *slot = None;
+                    return size;
+                }
+            }
+        }
+        panic!("free_va: no area starts at {:#x}", start.as_u64());
+    })
+}
+
+/// Unmaps a block of device registers mapped by `ioremap` and releases its virtual range.
+///
+/// The inverse of `ioremap`. The area to unmap is recomputed from the handle the way `ioremap` built it: it starts at
+/// the page that holds `io.base()`, and covers the sub-page offset plus `io.len()` rounded up to whole pages. The
+/// order matters. The pages are unmapped first (`unmap_range`, which also invalidates the TLB) and the virtual range is
+/// released last (`free_va`), because once it is released another `ioremap` can be given the same addresses, and they
+/// must not still be mapped. `free_va` returns the size it had recorded, which is checked in debug builds against the
+/// size just unmapped.
+///
+/// Copies of `io` are not invalidated: using one afterwards is a fault (the guard page and the cleared entries), not
+/// something this function can prevent, as with Linux.
+///
+/// # Arguments
+///
+/// * `io` - the handle `ioremap` returned
+///
+/// # Panics
+///
+/// If the range is not mapped or not recorded in the area table, e.g. a handle that is unmapped twice. Those are kernel
+/// bugs.
+pub fn iounmap(io: IoMem) {
+    let start = io.base().align_down(PAGE_SIZE as u64);
+    let offset = io.base() - start;
+    let map_size = (offset + io.len() as u64).next_multiple_of(PAGE_SIZE as u64);
+    map::unmap_range(kernel_pgd(), start, map_size);
+
+    let freed = free_va(start) as u64;
+    debug_assert_eq!(freed as u64, map_size);
+}
+
 /// Maps a block of device registers into the `ioremap` region and returns a handle to it.
 ///
 /// Rejects an empty or wrapping range and any range that overlaps RAM (RAM is reached through the linear map, and a
@@ -260,8 +324,41 @@ pub fn check_ioremap() {
         panic!("check_ioremap: a range past the physical address size returned {result:?} instead of OutOfRange");
     }
 
+    // iounmap: the range must go back to the table and the entries must be cleared. The mapping above is still alive, so
+    // `first` is not at the start of the region; once freed, first-fit has to hand the same range out again, and the
+    // second map_range would panic ("slot already mapped") if the entries had not been cleared.
+    let first = ioremap(UART_BASE, PAGE_SIZE).expect("check_ioremap: second ioremap of the PL011 failed");
+    iounmap(first);
+    let second = ioremap(UART_BASE, PAGE_SIZE).expect("check_ioremap: ioremap after iounmap failed");
+    if second.base() != first.base() {
+        panic!(
+            "check_ioremap: ioremap after iounmap returned {:#x} instead of the freed {:#x}",
+            second.base().as_u64(),
+            first.base().as_u64()
+        );
+    }
+
+    let read_ioremap = second.read32(0xFE0);
+    let read_idmap = mmio::read_mmio32(0x0900_0000, 0xFE0);
+    if read_ioremap != read_idmap {
+        panic!("check_ioremap: remapped PL011 reads {read_ioremap:#x} instead of {read_idmap:#x}");
+    }
+    iounmap(second);
+
+    // A block that does not start on a page boundary: the handle keeps the sub-page offset, and iounmap has to rebuild
+    // the page-aligned start and size from it. A mistake there makes free_va panic ("no area starts at ..."), or its
+    // size differ from the one unmapped (debug_assert).
+    let unaligned = ioremap(UART_BASE + 0xFE0, 0x20).expect("check_ioremap: ioremap of an unaligned block failed");
+    let read_ioremap = unaligned.read32(0);
+    let read_idmap = mmio::read_mmio32(0x0900_0000, 0xFE0);
+    if read_ioremap != read_idmap {
+        panic!("check_ioremap: unaligned PL011 block reads {read_ioremap:#x} instead of {read_idmap:#x}");
+    }
+    iounmap(unaligned);
+
     pr_info!(
         "ioremap",
-        "read-back OK (PL011 ID registers via the ioremap and identity mappings, three bad requests refused)"
+        "read-back OK (PL011 ID registers via the ioremap and identity mappings, three bad requests refused, \
+         unmap and remap of the same range, unaligned block)"
     );
 }

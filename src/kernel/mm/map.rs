@@ -13,6 +13,8 @@
 //! never need the tables to be mapped anywhere. They know nothing about where a range comes from, so the kernel image
 //! and, later, the linear map and `ioremap` can all build their mappings with `map_range`.
 
+use core::arch::asm;
+
 use crate::kernel::mm::frame_alloc;
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::pgtable::{
@@ -123,7 +125,7 @@ fn lookup_table<D: TableDescriptor>(table: PhysAddr, va: VirtAddr) -> Option<Phy
         return None;
     }
 
-    if descriptor.raw() & D::DESC_TYPE_MASK != DescriptorType::Table as u64 {
+    if !descriptor.is_table() {
         panic!("lookup_table: block mapping where a table is expected");
     }
 
@@ -286,5 +288,95 @@ pub fn map_range(root: PhysAddr, va: VirtAddr, pa: PhysAddr, size: u64, prot: Pr
             map_page(root, v, p, prot);
             off += PAGE_SIZE as u64;
         }
+    }
+}
+
+/// Unmaps `size` bytes starting at `va`, the inverse of `map_range`.
+///
+/// Walks `root` for every position of the range and clears the leaf entry it finds there, by writing a zero descriptor
+/// (not just clearing the valid bit). What is cleared is decided by the entries, not by the alignment of `va`: a 1 GiB
+/// or 2 MiB block is cleared whole and the walk advances by its size, a table is followed down to the Pte level and a
+/// 4 KiB page is cleared there. Intermediate tables are left allocated, even if they end up empty.
+///
+/// The TLB is invalidated before returning (all EL1 entries, inner shareable), so the old translations are gone once
+/// the function returns. This is the simple version; per-page invalidation is a later optimization.
+///
+/// # Arguments
+///
+/// * `root` - physical address of the Pgd table
+/// * `va` - virtual address of the start of the range, page aligned
+/// * `size` - length of the range in bytes, a multiple of the page size
+///
+/// # Panics
+///
+/// If any page in the range is not mapped, or if the range cuts a block in the middle (the range must be unmapped
+/// with the same granularity it was mapped with).
+pub fn unmap_range(root: PhysAddr, va: VirtAddr, size: u64) {
+    debug_assert!(va.is_aligned(PAGE_SIZE as u64));
+    debug_assert!(size % PAGE_SIZE as u64 == 0);
+
+    let mut off = 0;
+    while off < size {
+        let v = va + off;
+        let left = size - off;
+
+        // If there is no table panic (unlikely)
+        let Some(pud_table) = lookup_table::<Pgd>(root, v) else {
+            panic!(
+                "unmap_range: {:#x} is not mapped (no Pud table under its Pgd entry)",
+                v.as_u64()
+            );
+        };
+        let pud_entry = read_entry::<Pud>(pud_table, Pud::index(v));
+        // If the entry is not valid panic
+        if !pud_entry.is_valid() {
+            panic!("unmap_range: {:#x} is not mapped (invalid Pud entry)", v.as_u64());
+        }
+
+        // If it is a block check that what's left to unmap is at leat one PUD entry and invalidate it
+        if pud_entry.is_block() {
+            if left < PUD_SIZE as u64 {
+                panic!("unmap_range: range ends inside the 1 GiB block at {:#x}", v.as_u64());
+            }
+
+            write_entry(pud_table, Pud::index(v), Pud::invalid());
+            off += PUD_SIZE as u64;
+            continue;
+        }
+
+        let pmd_table = pud_entry.next_table();
+        let pmd_entry = read_entry::<Pmd>(pmd_table, Pmd::index(v));
+        if !pmd_entry.is_valid() {
+            panic!("unmap_range: {:#x} is not mapped (invalid Pmd entry)", v.as_u64());
+        }
+
+        if pmd_entry.is_block() {
+            if left < PMD_SIZE as u64 {
+                panic!("unmap_range: range ends inside the 2 MiB block at {:#x}", v.as_u64());
+            }
+
+            write_entry(pmd_table, Pmd::index(v), Pmd::invalid());
+            off += PMD_SIZE as u64;
+            continue;
+        }
+
+        let pte_table = pmd_entry.next_table();
+        let pte_entry = read_entry::<Pte>(pte_table, Pte::index(v));
+        if !pte_entry.is_valid() {
+            panic!("unmap_range: {:#x} is not mapped (invalid Pte entry)", v.as_u64());
+        }
+
+        write_entry(pte_table, Pte::index(v), Pte::invalid());
+        off += PAGE_SIZE as u64;
+    }
+
+    unsafe {
+        asm!(
+            "dsb ishst",
+            "tlbi vmalle1is",
+            "dsb ish",
+            "isb sy",
+            options(nostack, preserves_flags)
+        );
     }
 }

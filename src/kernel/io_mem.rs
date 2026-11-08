@@ -6,7 +6,8 @@
 //! it were RAM. This is the counterpart of Linux's `void __iomem *`, which sparse checks and the compiler doesn't.
 //!
 //! The register accessors are methods on the handle (not free functions taking a base), so only an `IoMem` can reach
-//! them. They take a byte offset within the window and, in debug builds, check it against the mapping length.
+//! them. They take a byte offset within the window and, in debug builds, check the whole access (4 or 8 bytes)
+//! against the mapping length.
 
 use crate::kernel::virt_addr::VirtAddr;
 use crate::utilities::mmio;
@@ -58,7 +59,7 @@ impl IoMem {
     ///
     /// In debug builds, if the register does not fit in the window (`offset + 4 > len`).
     pub fn read32(&self, offset: usize) -> u32 {
-        self.debug_check_bounds(offset);
+        self.debug_check_bounds(offset, size_of::<u32>());
         mmio::read_mmio32(self.base.as_usize(), offset)
     }
 
@@ -73,8 +74,39 @@ impl IoMem {
     ///
     /// In debug builds, if the register does not fit in the window (`offset + 4 > len`).
     pub fn write32(&self, offset: usize, value: u32) {
-        self.debug_check_bounds(offset);
+        self.debug_check_bounds(offset, size_of::<u32>());
         mmio::write_mmio32(self.base.as_usize(), offset, value);
+    }
+
+    /// Reads a 64-bit register.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - byte offset of the register within the window
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, if the register does not fit in the window (`offset + 8 > len`). The offset must also be a
+    /// multiple of 8, as a 64-bit device register is.
+    pub fn read64(&self, offset: usize) -> u64 {
+        self.debug_check_bounds(offset, size_of::<u64>());
+        mmio::read_mmio64(self.base.as_usize(), offset)
+    }
+
+    /// Writes a 64-bit register.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - byte offset of the register within the window
+    /// * `value` - value to write
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, if the register does not fit in the window (`offset + 8 > len`). The offset must also be a
+    /// multiple of 8, as a 64-bit device register is.
+    pub fn write64(&self, offset: usize, value: u64) {
+        self.debug_check_bounds(offset, size_of::<u64>());
+        mmio::write_mmio64(self.base.as_usize(), offset, value);
     }
 
     /// Sets (ORs in) bits of a 32-bit register, leaving the other bits untouched.
@@ -88,7 +120,7 @@ impl IoMem {
     ///
     /// In debug builds, if the register does not fit in the window (`offset + 4 > len`).
     pub fn set_bits32(&self, offset: usize, bits: u32) {
-        self.debug_check_bounds(offset);
+        self.debug_check_bounds(offset, size_of::<u32>());
         mmio::set_mmio_bits32(self.base.as_usize(), offset, bits);
     }
 
@@ -103,11 +135,11 @@ impl IoMem {
     ///
     /// In debug builds, if the register does not fit in the window (`offset + 4 > len`).
     pub fn clear_bits32(&self, offset: usize, bits: u32) {
-        self.debug_check_bounds(offset);
+        self.debug_check_bounds(offset, size_of::<u32>());
         mmio::clear_mmio_bits32(self.base.as_usize(), offset, bits);
     }
 
-    /// Checks that a 32-bit register at `offset` fits in the window.
+    /// Checks that a register of `width` bytes at `offset` fits in the window.
     ///
     /// A no-op in release builds (the `debug_assert!` is compiled out). The sum uses `checked_add` so a huge `offset`
     /// can't overflow and pass the comparison.
@@ -115,12 +147,13 @@ impl IoMem {
     /// # Arguments
     ///
     /// * `offset` - byte offset of the register within the window
+    /// * `width` - size of the access in bytes (`size_of` the register's type)
     ///
     /// # Panics
     ///
-    /// In debug builds, if `offset + 4 > len`.
+    /// In debug builds, if `offset + width > len`.
     #[inline]
-    fn debug_check_bounds(&self, offset: usize) {
-        debug_assert!(offset.checked_add(4).is_some_and(|end| end <= self.len));
+    fn debug_check_bounds(&self, offset: usize, width: usize) {
+        debug_assert!(offset.checked_add(width).is_some_and(|end| end <= self.len));
     }
 }

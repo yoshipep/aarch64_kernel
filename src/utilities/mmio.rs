@@ -33,6 +33,33 @@ pub fn write_mmio32(base: usize, offset: usize, value: u32) {
     }
 }
 
+/// Reads a 64-bit value from a MMIO register
+///
+/// # Arguments
+///
+/// * `base` - base address of the MMIO region
+/// * `offset` - byte offset of the register within that region
+pub fn read_mmio64(base: usize, offset: usize) -> u64 {
+    unsafe {
+        let ptr = (base as *const u8).add(offset) as *const u64;
+        return read_volatile(ptr);
+    }
+}
+
+/// Writes a 64-bit value to a MMIO register
+///
+/// # Arguments
+///
+/// * `base` - base address of the MMIO region
+/// * `offset` - byte offset of the register within that region
+/// * `value` - value to write
+pub fn write_mmio64(base: usize, offset: usize, value: u64) {
+    unsafe {
+        let ptr = (base as *mut u8).add(offset) as *mut u64;
+        write_volatile(ptr, value);
+    }
+}
+
 /// Sets (ORs in) bits of a 32-bit MMIO register, leaving other bits untouched
 ///
 /// # Arguments

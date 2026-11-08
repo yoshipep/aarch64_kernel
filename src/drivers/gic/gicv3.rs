@@ -4,16 +4,18 @@
 //! Distributor (GICD) for Shared Peripheral Interrupts (SPIs) and the Redistributor (GICR) for Private Peripheral
 //! Interrupts (PPIs) and Software Generated Interrupts (SGIs).
 //!
-//! The driver uses a global `Gicv3` instance accessed through public wrapper functions. Base addresses are discovered
-//! from the device tree during boot.
+//! The driver uses a global `Gicv3` instance accessed through public wrapper functions. The distributor and
+//! redistributor register blocks are discovered from the device tree and mapped with `ioremap` during boot.
 
 use core::arch::asm;
 use core::ptr::addr_of_mut;
 
 use crate::kernel::device;
+use crate::kernel::io_mem::IoMem;
+use crate::kernel::mm::ioremap;
+use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::icc;
 use crate::utilities::convert;
-use crate::utilities::mmio;
 
 /// Maximum number of cells in a GIC interrupt specifier
 ///
@@ -40,7 +42,7 @@ mod gicd {
 mod gicr {
     pub const SGI_BASE: usize = 0x10000; // Offset from RD_base to the SGI/PPI frame
     pub const WAKER: usize = 0x0014; // Redistributor Wake (in the RD frame)
-    /* The following live inside the SGI/PPI frame (RD_base + SGI_BASE) */
+                                     /* The following live inside the SGI/PPI frame (RD_base + SGI_BASE) */
     pub const IGROUPR0: usize = 0x080; // Interrupt Group 0
     pub const ISENABLER0: usize = 0x100; // Interrupt Set-Enable 0
     pub const IPRIORITYR: usize = 0x400; // Interrupt Priority
@@ -60,9 +62,9 @@ mod gicr {
 mod gicd_ctlr {
     pub const ENABLE_GRP0: u32 = 1 << 0; // Enable Group 0 interrupts
     pub const ENABLE_GRP1: u32 = 1 << 1; // Enable Group 1 interrupts
-    // Affinity Routing Enable. Do NOT write it: RAO/WI when GICv2 backwards compatibility is
-    // absent (so already in effect here), and changing it 0 -> 1 once a group is enabled is
-    // UNPREDICTABLE.
+                                         // Affinity Routing Enable. Do NOT write it: RAO/WI when GICv2 backwards compatibility is
+                                         // absent (so already in effect here), and changing it 0 -> 1 once a group is enabled is
+                                         // UNPREDICTABLE.
     pub const ARE: u32 = 1 << 4;
 }
 
@@ -105,43 +107,63 @@ mod layout {
     pub const ROUTER_STRIDE: usize = 8;
 }
 
-/// Global GICv3 instance holding the distributor and redistributor base addresses
+/// Global GICv3 instance holding the mapped distributor and redistributor register blocks
 static mut GIC: Gicv3 = Gicv3::new();
 
 /// GICv3 interrupt controller state
 ///
-/// Holds the MMIO base addresses for the GIC Distributor (GICD) and Redistributor (GICR) regions. These are populated
-/// during device tree parsing and used by all GIC operations.
+/// Holds the mapped register blocks of the GIC Distributor (GICD) and Redistributor (GICR). They are mapped with
+/// `ioremap` during device tree setup and used by all GIC operations.
 struct Gicv3 {
-    /// Base address of the GIC Distributor (GICD) registers
-    dist_addr: usize,
-    /// Base address of the GIC Redistributor (GICR) registers
-    redist_addr: usize,
+    /// The GIC Distributor (GICD) registers, `None` until `init_gic`
+    dist: Option<IoMem>,
+    /// The GIC Redistributor (GICR) registers, `None` until `init_gic`
+    redist: Option<IoMem>,
 }
 
 impl Gicv3 {
-    /// Const constructor for static initialization with zeroed addresses
+    /// Const constructor for static initialization, with no register block mapped yet
     pub const fn new() -> Self {
         Self {
-            dist_addr: 0,
-            redist_addr: 0,
+            dist: None,
+            redist: None,
         }
+    }
+
+    /// Returns the mapped distributor registers.
+    ///
+    /// # Panics
+    ///
+    /// If the GIC has not been initialized yet (`init_gic` not called).
+    fn dist(&self) -> IoMem {
+        self.dist.expect("gicv3: distributor used before init")
+    }
+
+    /// Returns the mapped redistributor registers.
+    ///
+    /// # Panics
+    ///
+    /// If the GIC has not been initialized yet (`init_gic` not called).
+    fn redist(&self) -> IoMem {
+        self.redist.expect("gicv3: redistributor used before init")
     }
 
     /// Initializes the GIC Distributor
     pub fn init_gic_distributor(&self) {
         unsafe {
-            mmio::set_mmio_bits32(self.dist_addr, gicd::CTLR, gicd_ctlr::ENABLE_GRP1);
+            self.dist().set_bits32(gicd::CTLR, gicd_ctlr::ENABLE_GRP1);
             asm!("dsb sy", options(nostack));
         }
     }
 
     /// Initializes the GIC Redistributor
     pub fn init_gic_redistributor(&self) {
+        let redist = self.redist();
+
         unsafe {
-            mmio::clear_mmio_bits32(self.redist_addr, gicr::WAKER, gicr_waker::PSLEEP);
+            redist.clear_bits32(gicr::WAKER, gicr_waker::PSLEEP);
             asm!("dsb sy", options(nostack));
-            while (mmio::read_mmio32(self.redist_addr, gicr::WAKER) & gicr_waker::CASLEEP) != 0 {}
+            while (redist.read32(gicr::WAKER) & gicr_waker::CASLEEP) != 0 {}
         }
     }
 
@@ -153,17 +175,17 @@ impl Gicv3 {
     /// * `prio` - priority value; lower numbers are higher priority
     pub fn set_ppi_priority(&self, id: u32, prio: u8) {
         unsafe {
-            let sgi_base = self.redist_addr + gicr::SGI_BASE;
+            let redist = self.redist();
             let reg_index = id / layout::PRIORITY_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
-            let prio_reg_addr = sgi_base + gicr::IPRIORITYR + reg_offset;
+            let prio_reg_off = gicr::SGI_BASE + gicr::IPRIORITYR + reg_offset;
             let bit_shift = (id % layout::PRIORITY_PER_REG) * layout::PRIORITY_BITS;
 
-            let mut reg_val = mmio::read_mmio32(prio_reg_addr, 0);
+            let mut reg_val = redist.read32(prio_reg_off);
             reg_val &= !(layout::PRIORITY_MASK << bit_shift);
             reg_val |= (prio as u32) << bit_shift;
 
-            mmio::write_mmio32(prio_reg_addr, 0, reg_val);
+            redist.write32(prio_reg_off, reg_val);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -171,7 +193,7 @@ impl Gicv3 {
     /// Assigns the PPI/SGI `id` (0-31) to Group 1
     pub fn set_ppi_group1(&self, id: u32) {
         unsafe {
-            mmio::set_mmio_bits32(self.redist_addr + gicr::SGI_BASE, gicr::IGROUPR0, 1 << id);
+            self.redist().set_bits32(gicr::SGI_BASE + gicr::IGROUPR0, 1 << id);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -184,7 +206,7 @@ impl Gicv3 {
     /// distinguish between them.
     pub fn enable_ppi(&self, id: u32) {
         unsafe {
-            mmio::set_mmio_bits32(self.redist_addr + gicr::SGI_BASE, gicr::ISENABLER0, 1 << id);
+            self.redist().set_bits32(gicr::SGI_BASE + gicr::ISENABLER0, 1 << id);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -197,16 +219,17 @@ impl Gicv3 {
     /// * `prio` - priority value; lower numbers are higher priority
     pub fn set_spi_priority(&self, id: u32, prio: u8) {
         unsafe {
+            let dist = self.dist();
             let reg_index = id / layout::PRIORITY_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
-            let prio_reg_addr = self.dist_addr + gicd::IPRIORITYR + reg_offset;
+            let prio_reg_off = gicd::IPRIORITYR + reg_offset;
             let bit_shift = (id % layout::PRIORITY_PER_REG) * layout::PRIORITY_BITS;
 
-            let mut reg_val = mmio::read_mmio32(prio_reg_addr, 0);
+            let mut reg_val = dist.read32(prio_reg_off);
             reg_val &= !(layout::PRIORITY_MASK << bit_shift);
             reg_val |= (prio as u32) << bit_shift;
 
-            mmio::write_mmio32(prio_reg_addr, 0, reg_val);
+            dist.write32(prio_reg_off, reg_val);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -214,16 +237,17 @@ impl Gicv3 {
     /// Configures the SPI `id` (32+) to be level-sensitive (0b00 in ICFGR)
     pub fn set_spi_trigger_level(&self, id: u32) {
         unsafe {
+            let dist = self.dist();
             let reg_index = id / layout::CONFIG_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
-            let cfg_reg_addr = self.dist_addr + gicd::ICFGR + reg_offset;
+            let cfg_reg_off = gicd::ICFGR + reg_offset;
             let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
 
-            let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
+            let mut reg_val = dist.read32(cfg_reg_off);
             reg_val &= !(layout::CONFIG_MASK << bit_shift);
             reg_val |= (Trigger::Level as u32) << bit_shift;
 
-            mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
+            dist.write32(cfg_reg_off, reg_val);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -231,16 +255,17 @@ impl Gicv3 {
     /// Configures the SPI `id` (32+) to be edge-triggered (0b10 in ICFGR)
     pub fn set_spi_trigger_edge(&self, id: u32) {
         unsafe {
+            let dist = self.dist();
             let reg_index = id / layout::CONFIG_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
-            let cfg_reg_addr = self.dist_addr + gicd::ICFGR + reg_offset;
+            let cfg_reg_off = gicd::ICFGR + reg_offset;
             let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
 
-            let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
+            let mut reg_val = dist.read32(cfg_reg_off);
             reg_val &= !(layout::CONFIG_MASK << bit_shift);
             reg_val |= (Trigger::Edge as u32) << bit_shift;
 
-            mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
+            dist.write32(cfg_reg_off, reg_val);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -254,10 +279,10 @@ impl Gicv3 {
         unsafe {
             let reg_index = id / layout::ENABLE_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
-            let enabler_reg_addr = self.dist_addr + gicd::ISENABLER + reg_offset;
+            let enabler_reg_off = gicd::ISENABLER + reg_offset;
             let bit_to_set = 1 << (id % layout::ENABLE_PER_REG);
 
-            mmio::write_mmio32(enabler_reg_addr, 0, bit_to_set);
+            self.dist().write32(enabler_reg_off, bit_to_set);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -268,14 +293,12 @@ impl Gicv3 {
     ///
     /// * `id` - SPI interrupt id (32+)
     /// * `core_affinity` - target core, encoded as an `ICC_SGI1R_EL1`-style affinity value, written directly into the
-    ///   SPI's `IROUTER` register
+    ///   SPI's `IROUTER` register (a 64-bit register, so it is written with a single 64-bit access)
     pub fn set_spi_routing(&self, id: u32, core_affinity: u64) {
         unsafe {
-            let router_reg_addr =
-                self.dist_addr + gicd::IROUTER + (layout::ROUTER_STRIDE * id as usize);
-            let router_ptr = router_reg_addr as *mut u64;
+            let router_reg_off = gicd::IROUTER + (layout::ROUTER_STRIDE * id as usize);
 
-            core::ptr::write_volatile(router_ptr, core_affinity);
+            self.dist().write64(router_reg_off, core_affinity);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -285,10 +308,10 @@ impl Gicv3 {
         unsafe {
             let reg_index = id / layout::ENABLE_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
-            let group_reg_addr = self.dist_addr + gicd::IGROUPR + reg_offset;
+            let group_reg_off = gicd::IGROUPR + reg_offset;
             let bit_to_set = 1 << (id % layout::ENABLE_PER_REG);
 
-            mmio::set_mmio_bits32(group_reg_addr, 0, bit_to_set);
+            self.dist().set_bits32(group_reg_off, bit_to_set);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -296,17 +319,17 @@ impl Gicv3 {
     /// Configures the PPI `id` (0-31) to be level-sensitive (0b00 in ICFGR)
     pub fn set_ppi_trigger_level(&self, id: u32) {
         unsafe {
+            let redist = self.redist();
             let reg_index = id / layout::CONFIG_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
             let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
-            let sgi_base = self.redist_addr + gicr::SGI_BASE;
-            let cfg_reg_addr = sgi_base + gicr::ICFGR + reg_offset;
+            let cfg_reg_off = gicr::SGI_BASE + gicr::ICFGR + reg_offset;
 
-            let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
+            let mut reg_val = redist.read32(cfg_reg_off);
             reg_val &= !(layout::CONFIG_MASK << bit_shift);
             reg_val |= (Trigger::Level as u32) << bit_shift;
 
-            mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
+            redist.write32(cfg_reg_off, reg_val);
             asm!("dsb sy", options(nostack));
         }
     }
@@ -314,33 +337,38 @@ impl Gicv3 {
     /// Configures the PPI `id` (0-31) to be edge-triggered (0b10 in ICFGR)
     pub fn set_ppi_trigger_edge(&self, id: u32) {
         unsafe {
+            let redist = self.redist();
             let reg_index = id / layout::CONFIG_PER_REG;
             let reg_offset = reg_index as usize * layout::REG_BYTES;
             let bit_shift = (id % layout::CONFIG_PER_REG) * layout::CONFIG_BITS;
-            let sgi_base = self.redist_addr + gicr::SGI_BASE;
-            let cfg_reg_addr = sgi_base + gicr::ICFGR + reg_offset;
+            let cfg_reg_off = gicr::SGI_BASE + gicr::ICFGR + reg_offset;
 
-            let mut reg_val = mmio::read_mmio32(cfg_reg_addr, 0);
+            let mut reg_val = redist.read32(cfg_reg_off);
             reg_val &= !(layout::CONFIG_MASK << bit_shift);
             reg_val |= (Trigger::Edge as u32) << bit_shift;
 
-            mmio::write_mmio32(cfg_reg_addr, 0, reg_val);
+            redist.write32(cfg_reg_off, reg_val);
             asm!("dsb sy", options(nostack));
         }
     }
 }
 
-/// Initializes the GIC with the given distributor and redistributor addresses
+/// Initializes the GIC with the given distributor and redistributor register blocks
 ///
-/// Stores the base addresses and initializes both the distributor (enables Group 1 interrupts — single-Security-state
-/// view, see `gicd_ctlr`) and redistributor (wakes the PE from sleep).
+/// Stores the mapped register blocks and initializes both the distributor (enables Group 1 interrupts —
+/// single-Security-state view, see `gicd_ctlr`) and redistributor (wakes the PE from sleep).
 ///
 /// Affinity routing is not enabled here: GICD_CTLR.ARE is RAO/WI when GICv2 backwards compatibility is absent, so it is
 /// already in effect and IROUTER writes take effect.
-fn init_gic(dist_addr: usize, redist_addr: usize) {
+///
+/// # Arguments
+///
+/// * `dist` - the distributor (GICD) registers, as mapped by `ioremap`
+/// * `redist` - the redistributor (GICR) registers, as mapped by `ioremap`
+fn init_gic(dist: IoMem, redist: IoMem) {
     unsafe {
-        (*addr_of_mut!(GIC)).dist_addr = dist_addr;
-        (*addr_of_mut!(GIC)).redist_addr = redist_addr;
+        (*addr_of_mut!(GIC)).dist = Some(dist);
+        (*addr_of_mut!(GIC)).redist = Some(redist);
         (*addr_of_mut!(GIC)).init_gic_distributor();
         (*addr_of_mut!(GIC)).init_gic_redistributor();
     }
@@ -486,30 +514,58 @@ pub fn enable_grp1_ints() {
 
 /// Sets up the GICv3 from device tree properties
 ///
-/// Parses the `reg` property to extract the distributor (GICD) and redistributor (GICR) base addresses, initializes the
-/// GIC hardware, sets the CPU interface priority mask to accept all priorities, and enables Group 1 interrupts.
+/// Parses the `reg` property to extract the base address and size of the distributor (GICD) and redistributor (GICR)
+/// blocks, maps each whole block with `ioremap` (panics if `reg` is missing or a mapping fails: without them the GIC
+/// can't work), initializes the GIC hardware, sets the CPU interface priority mask to accept all priorities, and
+/// enables Group 1 interrupts.
 pub fn setup(dev: &device::PlatformDevice) {
-    let mut gicd_addr: usize = 0;
-    let mut gicr_addr: usize = 0;
+    let mut gicd_addr: u64 = 0;
+    let mut gicd_size: u64 = 0;
+    let mut gicr_addr: u64 = 0;
+    let mut gicr_size: u64 = 0;
 
     // Get #address-cells and #size_cells
     let (addr_cells, size_cells) = dev.get_parent_cells();
-    if let Some(reg_prop) = dev.find_property("reg") {
-        for i in 0..addr_cells as usize {
-            let cell = convert::read_be_u32(reg_prop.value, i * 4);
-            gicd_addr = (gicd_addr << 32) | cell as usize;
-        }
+    let Some(reg_prop) = dev.find_property("reg") else {
+        panic!("gicv3: no reg property");
+    };
 
-        let gicr_off = (addr_cells + size_cells) as usize * 4; // Convert cells to bytes
-        for i in 0..addr_cells as usize {
-            unsafe {
-                let cell = convert::read_be_u32(reg_prop.value.add(gicr_off), i * 4);
-                gicr_addr = (gicr_addr << 32) | cell as usize;
-            }
-        }
-
-        init_gic(gicd_addr, gicr_addr);
+    // Extract gicd base addr
+    for i in 0..addr_cells as usize {
+        let cell = convert::read_be_u32(reg_prop.value, i * 4);
+        gicd_addr = (gicd_addr << 32) | cell as u64;
     }
+
+    // Extract gicd region size
+    for i in addr_cells..addr_cells + size_cells {
+        let cell = convert::read_be_u32(reg_prop.value, i as usize * 4);
+        gicd_size = (gicd_size << 32) | cell as u64;
+    }
+
+    let gicd_io = ioremap::ioremap(PhysAddr::new(gicd_addr), gicd_size as usize)
+        .expect("gicv3: ioremap of the gic distributor failed");
+
+    // Extract gicr base addr
+    let gicr_off = (addr_cells + size_cells) as usize * 4; // Convert cells to bytes
+    for i in 0..addr_cells as usize {
+        unsafe {
+            let cell = convert::read_be_u32(reg_prop.value.add(gicr_off), i * 4);
+            gicr_addr = (gicr_addr << 32) | cell as u64;
+        }
+    }
+
+    // Extract gicr region size
+    for i in addr_cells..addr_cells + size_cells {
+        unsafe {
+            let cell = convert::read_be_u32(reg_prop.value.add(gicr_off), i as usize * 4);
+            gicr_size = (gicr_size << 32) | cell as u64;
+        }
+    }
+
+    let gicr_io = ioremap::ioremap(PhysAddr::new(gicr_addr), gicr_size as usize)
+        .expect("gicv3: ioremap of the gic redistributor failed");
+
+    init_gic(gicd_io, gicr_io);
 
     set_priority_mask(PRIORITY_MASK_ALL);
     enable_grp1_ints();

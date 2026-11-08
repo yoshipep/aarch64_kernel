@@ -32,25 +32,12 @@ use crate::kernel::meminfo;
 use crate::kernel::mm::identity::kernel_pgd;
 use crate::kernel::mm::mair::MairIdx;
 use crate::kernel::mm::map;
-use crate::kernel::mm::pgtable::{KIMAGE_VADDR, PAGE_MASK, PAGE_SIZE, PA_BITS, PGD_SIZE};
+use crate::kernel::mm::pgtable::{IOREMAP_END, IOREMAP_START, PAGE_MASK, PAGE_SIZE, PA_BITS};
 use crate::kernel::mm::pgtable_hwdef::leaf;
 use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::virt_addr::VirtAddr;
 use crate::pr_info;
 use crate::utilities::mmio;
-
-/// First virtual address of the `ioremap` region: the Pgd slot after the one holding the kernel image, i.e. index
-/// `0x101`, `0xFFFF_8080_0000_0000`. It is derived from the image's slot, not from `IOREMAP_SIZE`, so the region can
-/// change size without moving.
-pub const IOREMAP_START: u64 = KIMAGE_VADDR + PGD_SIZE as u64;
-/// Size of the `ioremap` region in bytes: one Pgd entry, 512 GiB.
-pub const IOREMAP_SIZE: u64 = PGD_SIZE as u64;
-/// First address past the `ioremap` region.
-pub const IOREMAP_END: u64 = IOREMAP_START + IOREMAP_SIZE;
-
-// The region must not overlap the kernel image's Pgd slot. Fails the build if the layout constants are edited
-// inconsistently, instead of failing at boot.
-const _: () = assert!(IOREMAP_START >= KIMAGE_VADDR + PGD_SIZE as u64);
 
 /// Number of areas the table can hold, so at most this many devices can be mapped at once.
 const MAX_AREAS: usize = 16;

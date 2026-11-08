@@ -408,7 +408,7 @@ pub fn setup(dev: &device::PlatformDevice) {
     let mut freq: u32 = 0;
     let mut interrupt_info: [u32; gicv3::MAX_INTERRUPT_CELLS] = [0; gicv3::MAX_INTERRUPT_CELLS];
 
-    // Extract gicd base addr and region size
+    // Get the base addr and region size of the uart registers
     let Some((uart_addr, uart_size)) = dev.reg(0) else {
         panic!("pl011: no reg entry for the uart");
     };

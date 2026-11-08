@@ -63,6 +63,21 @@ pub const PGD_SHIFT: usize = Pgd::SHIFT;
 /// with this granule, so it is the unit the top-level regions of the address space (image, `ioremap`) are laid out in.
 pub const PGD_SIZE: usize = 1 << PGD_SHIFT;
 
+/// First virtual address of the `ioremap` region: the Pgd slot after the one holding the kernel image, i.e. index
+/// `0x101`, `0xFFFF_8080_0000_0000`. It is derived from the image's slot, not from `IOREMAP_SIZE`, so the region can
+/// change size without moving.
+pub const IOREMAP_START: u64 = KIMAGE_VADDR + PGD_SIZE as u64;
+
+/// Size of the `ioremap` region in bytes: one Pgd entry, 512 GiB.
+pub const IOREMAP_SIZE: u64 = PGD_SIZE as u64;
+
+/// First address past the `ioremap` region.
+pub const IOREMAP_END: u64 = IOREMAP_START + IOREMAP_SIZE;
+
+// The region must not overlap the kernel image's Pgd slot. Fails the build if the layout constants are edited
+// inconsistently, instead of failing at boot.
+const _: () = assert!(IOREMAP_START >= KIMAGE_VADDR + PGD_SIZE as u64);
+
 /// Bit position of the Pud index in a virtual address (30); same value as `Pud::SHIFT`.
 pub const PUD_SHIFT: usize = Pud::SHIFT;
 

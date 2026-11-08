@@ -28,7 +28,6 @@ use crate::kernel::device;
 use crate::kernel::dtb;
 use crate::kernel::io_mem::IoMem;
 use crate::kernel::mm::ioremap;
-use crate::kernel::phys_addr::PhysAddr;
 use crate::utilities::convert;
 use crate::utilities::mmio;
 
@@ -406,29 +405,14 @@ macro_rules! println {
 ///
 /// After extracting these values, initializes and configures the UART hardware.
 pub fn setup(dev: &device::PlatformDevice) {
-    let mut addr: u64 = 0;
-    let mut size: u64 = 0;
     let mut freq: u32 = 0;
     let mut interrupt_info: [u32; gicv3::MAX_INTERRUPT_CELLS] = [0; gicv3::MAX_INTERRUPT_CELLS];
-    // Get #address-cells from parent
-    let (addr_cells, size_cells) = dev.get_parent_cells();
-    // Parse reg property for base address
-    let Some(reg_prop) = dev.find_property("reg") else {
-        panic!("pl011: no reg property");
+
+    // Extract gicd base addr and region size
+    let Some((uart_addr, uart_size)) = dev.reg(0) else {
+        panic!("pl011: no reg entry for the uart");
     };
-
-    for i in 0..addr_cells as usize {
-        let cell = convert::read_be_u32(reg_prop.value, i * 4);
-        addr = (addr << 32) | cell as u64;
-    }
-
-    for i in addr_cells..addr_cells + size_cells {
-        let cell = convert::read_be_u32(reg_prop.value, i as usize * 4);
-        size = (size << 32) | cell as u64;
-    }
-
-    let ioaddr =
-        ioremap::ioremap(PhysAddr::new(addr), size as usize).expect("pl011: ioremap of the register block failed");
+    let ioaddr = ioremap::ioremap(uart_addr, uart_size).expect("pl011: ioremap of the register block failed");
 
     // Parse interrupts property
     if let Some(int_prop) = dev.find_property("interrupts") {

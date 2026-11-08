@@ -26,6 +26,7 @@ use crate::drivers::gic::gicv3;
 use crate::drivers::timer::arch_timer;
 use crate::drivers::uart::pl011;
 use crate::kernel::meminfo;
+use crate::kernel::phys_addr::PhysAddr;
 use crate::utilities::convert;
 
 /// Maximum number of properties per device node.
@@ -63,6 +64,19 @@ impl Default for Property {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn read_cells(ptr: *const u8, offset: usize, cells: u32) -> u64 {
+    let mut value = 0;
+
+    for i in 0..cells as usize {
+        // Here we read the property from start which carries the correct index, and advance
+        // sizeof(u32) bytes
+        let cell = convert::read_be_u32(ptr, offset + i * size_of::<u32>());
+        value = (value << 32) | cell as u64;
+    }
+
+    value
 }
 
 /// A platform device discovered from the DTB.
@@ -129,6 +143,44 @@ impl PlatformDevice {
         }
 
         (addr_cells, size_cells)
+    }
+
+    /// Returns the address and size of the `index`-th entry of the device's `reg` property
+    ///
+    /// `reg` is a list of `(address, size)` pairs, one per register block of the device (the GIC has two: the
+    /// distributor and the redistributor). The width of each pair is given by the parent's `#address-cells` and
+    /// `#size-cells`, each cell being a big-endian 32-bit word, so an entry takes `(address cells + size cells) * 4`
+    /// bytes. The values are in the form `ioremap` takes.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - which `(address, size)` pair to return, starting at 0
+    ///
+    /// # Returns
+    ///
+    /// `Some((address, size))`, or `None` if the device has no `reg` property, if the property is too short to hold
+    /// entry `index`, or if the cell counts don't fit in 64 bits (more than 2 cells for the address or for the size).
+    pub fn reg(&self, index: usize) -> Option<(PhysAddr, usize)> {
+        let (addr_cells, size_cells) = self.get_parent_cells();
+        if addr_cells > 2 || size_cells > 2 {
+            return None;
+        }
+
+        let reg = self.find_property("reg")?;
+        let entry_size = (addr_cells + size_cells) as usize * size_of::<u32>();
+        // Very unlikely to happen since no dtb has an entry size of 0
+        if entry_size == 0 {
+            return None;
+        }
+
+        let start = entry_size.checked_mul(index)?;
+        if start.checked_add(entry_size)? > reg.len {
+            return None;
+        }
+
+        let addr = read_cells(reg.value, start, addr_cells);
+        let size = read_cells(reg.value, start + addr_cells as usize * size_of::<u32>(), size_cells);
+        Some((PhysAddr::new(addr), size as usize))
     }
 }
 

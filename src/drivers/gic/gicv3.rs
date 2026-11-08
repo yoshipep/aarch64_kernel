@@ -13,9 +13,7 @@ use core::ptr::addr_of_mut;
 use crate::kernel::device;
 use crate::kernel::io_mem::IoMem;
 use crate::kernel::mm::ioremap;
-use crate::kernel::phys_addr::PhysAddr;
 use crate::kernel::sysreg::icc;
-use crate::utilities::convert;
 
 /// Maximum number of cells in a GIC interrupt specifier
 ///
@@ -519,51 +517,17 @@ pub fn enable_grp1_ints() {
 /// can't work), initializes the GIC hardware, sets the CPU interface priority mask to accept all priorities, and
 /// enables Group 1 interrupts.
 pub fn setup(dev: &device::PlatformDevice) {
-    let mut gicd_addr: u64 = 0;
-    let mut gicd_size: u64 = 0;
-    let mut gicr_addr: u64 = 0;
-    let mut gicr_size: u64 = 0;
-
-    // Get #address-cells and #size_cells
-    let (addr_cells, size_cells) = dev.get_parent_cells();
-    let Some(reg_prop) = dev.find_property("reg") else {
-        panic!("gicv3: no reg property");
+    // Extract gicd base addr and region size
+    let Some((gicd_addr, gicd_size)) = dev.reg(0) else {
+        panic!("gicv3: no reg entry for the distributor");
     };
+    let gicd_io = ioremap::ioremap(gicd_addr, gicd_size).expect("gicv3: ioremap of the gic distributor failed");
 
-    // Extract gicd base addr
-    for i in 0..addr_cells as usize {
-        let cell = convert::read_be_u32(reg_prop.value, i * 4);
-        gicd_addr = (gicd_addr << 32) | cell as u64;
-    }
-
-    // Extract gicd region size
-    for i in addr_cells..addr_cells + size_cells {
-        let cell = convert::read_be_u32(reg_prop.value, i as usize * 4);
-        gicd_size = (gicd_size << 32) | cell as u64;
-    }
-
-    let gicd_io = ioremap::ioremap(PhysAddr::new(gicd_addr), gicd_size as usize)
-        .expect("gicv3: ioremap of the gic distributor failed");
-
-    // Extract gicr base addr
-    let gicr_off = (addr_cells + size_cells) as usize * 4; // Convert cells to bytes
-    for i in 0..addr_cells as usize {
-        unsafe {
-            let cell = convert::read_be_u32(reg_prop.value.add(gicr_off), i * 4);
-            gicr_addr = (gicr_addr << 32) | cell as u64;
-        }
-    }
-
-    // Extract gicr region size
-    for i in addr_cells..addr_cells + size_cells {
-        unsafe {
-            let cell = convert::read_be_u32(reg_prop.value.add(gicr_off), i as usize * 4);
-            gicr_size = (gicr_size << 32) | cell as u64;
-        }
-    }
-
-    let gicr_io = ioremap::ioremap(PhysAddr::new(gicr_addr), gicr_size as usize)
-        .expect("gicv3: ioremap of the gic redistributor failed");
+    // Extract gicr base addr and region size
+    let Some((gicr_addr, gicr_size)) = dev.reg(1) else {
+        panic!("gicv3: no reg entry for the redistributor");
+    };
+    let gicr_io = ioremap::ioremap(gicr_addr, gicr_size).expect("gicv3: ioremap of the gic redistributor failed");
 
     init_gic(gicd_io, gicr_io);
 

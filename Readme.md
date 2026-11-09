@@ -14,9 +14,9 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - Freestanding Rust code (no `std`, no runtime)
 - Custom linker script and boot assembly
 - Boots from the [bootloader](https://github.com/yoshipep/aarch64_bootloader)
-- **Device Tree Blob (DTB) parsing** — discovers hardware at boot by walking the flattened device tree. Devices register a `compatible` string and a setup function in a static match table, similar to Linux's `platform_driver` model
-- **GICv3 interrupt controller** — full driver for the Distributor (SPIs) and Redistributor (PPIs/SGIs), with support for priority, group, trigger mode (level/edge), and affinity routing
-- **PL011 UART driver** — polling TX, interrupt-driven RX with an IRQ-safe circular buffer. Base address and clock frequency discovered from the DTB. Includes an early console fallback (hardcoded base address) so `print!` works before DTB-based driver initialization
+- **Device Tree Blob (DTB) parsing** — discovers hardware at boot by walking the flattened device tree. Devices register a `compatible` string and a setup function in a static match table, similar to Linux's `platform_driver` model. Drivers run in stages (memory, interrupt controllers, other devices), so the interrupt controller is ready before the devices that use it
+- **GICv3 interrupt controller** — full driver for the Distributor (SPIs) and Redistributor (PPIs/SGIs), with support for priority, group, trigger mode (level/edge), and affinity routing. Both register blocks are reached through `ioremap` mappings
+- **PL011 UART driver** — polling TX, interrupt-driven RX with an IRQ-safe circular buffer. Registers, interrupt and clock frequency discovered from the DTB, and accessed through an `ioremap` mapping. Includes an early console fallback (hardcoded base address) so `print!` works before DTB-based driver initialization
 - **ARM Generic Timer** — non-secure physical timer (EL1) with millisecond-granularity arming. Interrupt configured as a PPI through the GIC redistributor
 - **Exception handling** — full vector table with handlers for synchronous exceptions (SVC), IRQs, FIQs, and SErrors. Unimplemented exception classes are decoded and reported
 - **IRQ-safe mutex** — spinlock that masks interrupts while held, preventing deadlocks between main code and interrupt handlers
@@ -24,6 +24,7 @@ This is not intended to be a complete OS — it’s a learning project, built fr
 - **Identity mapping and MMU** — sets up MAIR_EL1 (device nGnRnE, normal write-back, normal non-cacheable), builds a temporary identity map in TTBR0 (L0 table → L1 1 GiB block descriptors), configures TCR_EL1 (48-bit VA in both halves, 44-bit PA, 4K granule, inner-shareable cacheable), and enables the MMU via SCTLR_EL1
 - **Physical frame allocator** — hands out 4 KiB frames from the RAM found in the DTB, as a free list threaded through the free frames themselves
 - **Kernel virtual memory in TTBR1** — the kernel image mapped at `0xFFFF_8000_0000_0000` with per-region permissions (W^X), and all of RAM mapped at `0xFFFF_0000_0000_0000` (the linear map), both built with a layered page-table API that picks the largest block that fits. Typed `PhysAddr`/`VirtAddr` keep physical and virtual addresses apart
+- **`ioremap` for device registers** — a region of its own in TTBR1 (`0xFFFF_8080_0000_0000`, one 512 GiB top-level slot) where device blocks are mapped with Device-nGnRE attributes, never executable. Virtual ranges come from a first-fit area table with an unmapped guard page after each area; `ioremap` refuses empty, wrapping, out-of-range and RAM-overlapping requests, and `iounmap` unmaps (with a TLB invalidate) and frees the range. The `IoMem` handle it returns is the only type that can read or write the registers, so a RAM pointer and a register block can't be mixed up
 
 ---
 
